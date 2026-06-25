@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.experimental_lab
+aliases:
+  - experimental lab
+skill_kind: experimental_lab
+primary_frame: experiment_variable_isolation
+secondary_frames:
+  - mechanism_tracing
+  - error_analysis
+subskills:
+  - variable_selection
+  - hypothesis_linking
+  - observation_capture
+  - mechanism_revision
+  - next_trial_design
+evidence_contract:
+  - sensory_log
+  - before_after_comparison
+  - free_text_answer
+  - self_rubric
+feedback_sources:
+  - external_metric
+  - self_check
+  - llm_check
+opening_move: "Choose one controllable variable inside `{topic}`, predict its effect, and run or simulate one comparison."
+stop_condition: "Stop when the learner has isolated one variable in `{topic}` and linked the observation back to a mechanism or revised hypothesis."
+coach_rules:
+  - "Isolate one variable at a time."
+  - "Demand observable evidence, not just expectation."
+  - "Tie every observation back to a mechanism or next hypothesis."
+safety_notes:
+  - "Do not improvise unsafe lab steps or ingest anything unsafe."
+legacy_template_file: evidence_generic.md

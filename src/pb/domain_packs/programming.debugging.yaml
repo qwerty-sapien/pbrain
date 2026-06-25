@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: programming.debugging
+aliases:
+  - debugging
+  - debug
+  - failing test
+  - compiler error
+  - bugfix
+nearby_terms:
+  - stack trace
+  - trace
+  - breakpoint
+  - instrumentation
+  - rust
+  - c++
+skill_kind: engineering_build_debug
+primary_frame: failure_point_isolation
+secondary_frames:
+  - error_analysis
+  - deliberate_rep_loop
+subskills:
+  - failure_reproduction
+  - error_capture
+  - hypothesis_isolation
+  - instrumentation_choice
+  - fix_verification
+evidence_contract:
+  - debug_trace
+  - artifact_path
+  - free_text_answer
+  - quiz_score
+feedback_sources:
+  - compiler_or_test
+  - llm_check
+  - self_check
+opening_move: "Reproduce the exact failure in `{topic}`, paste or paraphrase the real error/test signal, and name one narrow hypothesis to probe first."
+stop_condition: "Stop when the learner has reproduced the failure, run one high-signal probe, and confirmed either the fix or the next precise hypothesis."
+coach_rules:
+  - "Always anchor the session to a real failing test, runtime error, or debug trace."
+  - "Prefer one instrumentation step at a time over broad refactors."
+  - "Use tests, logs, and traces as the source of truth."
+safety_notes: []
+legacy_template_file: evidence_rust.md

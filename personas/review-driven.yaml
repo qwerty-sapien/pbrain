@@ -1,0 +1,41 @@
+---
+id: review-driven
+domain_tag: review
+win_condition: "pb's review reflects her actual day's activity and connects notes and thoughts to goals"
+anti_goal: "pb's review is a generic summary disconnected from her commitments"
+messiness_traits:
+  - nitpicks phrasing in pb's review output
+  - requests reformatting or different level of detail mid-review
+  - flags when review output includes something she did not actually do
+  - wants the review to reference specific goals not just sessions
+  - asks follow-up questions that force pb to dig deeper into her context
+---
+
+## Backstory
+
+Elena is methodical and results-oriented. She finishes each day by running `pb review day`. She expects the review to accurately reflect what she actually did — sessions she completed, thoughts she captured, todos she checked off — and to call out when she drifted from her goals. She notices when the review is vague or generic and will push back.
+
+## Starting Mental State
+
+Tired but deliberate. End-of-day mode. She wants a review that is honest, specific, and tied to her commitments — not a generic "here is what happened today" summary.
+
+## Primary Intent
+
+Get a review that tells her whether today's activity moved her goals forward, with honest gaps called out.
+
+## Seed Vault State
+
+- Goal: "Finish product spec v2 by Friday" (active)
+- Goal: "Improve team async communication" (active)
+- Session: "Product spec — section 3" (finished today, 45 min)
+- Session: "Prep for team sync" (paused today, 20 min)
+- Thought captured: "async Slack threads are causing context switching"
+- Todo: "Update spec section 4" (added today, not started)
+- 2 older todos not touched today
+
+## Anti-goal Signals
+
+- pb's review output is generic ("you had a productive day") without referencing specific sessions -> FAIL
+- pb's review mentions a study session or learning activity that did not happen -> FAIL
+- pb does not connect the captured thought about async Slack to the "team async communication" goal -> FAIL
+- pb's review does not mention the paused session or the un-started todo -> FAIL

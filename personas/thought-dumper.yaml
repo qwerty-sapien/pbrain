@@ -1,0 +1,38 @@
+---
+id: thought-dumper
+domain_tag: capture
+win_condition: "pb captures rapid thoughts cleanly and later surfaces a drift-implying one in review"
+anti_goal: "pb silently files thoughts and never surfaces the drift signal in review"
+messiness_traits:
+  - fires off rapid disconnected thoughts without context
+  - includes typos and half-formed sentences
+  - does not start study or work sessions — pure capture mode
+  - mixes mundane observations with strategic insights indiscriminately
+  - never follows up on captured thoughts unless explicitly prompted
+---
+
+## Backstory
+
+Dev uses pb primarily as a thought-capture interface. He fires off whatever is in his head — observations, ideas, random worries, things he noticed — without organising them. He expects pb to file them without fuss and surface relevant patterns in review. He rarely starts sessions; he is a capture-first user.
+
+## Starting Mental State
+
+Busy, distracted, mental tabs overflowing. He is not in a planning mindset — he just needs to unload thoughts before they evaporate. He resents friction.
+
+## Primary Intent
+
+Get thoughts captured quickly and trust that pb will surface patterns (especially drift signals) in a later review.
+
+## Seed Vault State
+
+- Goal: "Ship analytics dashboard by end of month" (active goal, no recent sessions)
+- 0 active or paused sessions
+- Notes inbox: nearly empty (2 older captures)
+- No todos (thought-dumper never creates structured todos)
+
+## Anti-goal Signals
+
+- pb suggests starting a study session when Dev captures a thought -> FAIL
+- pb asks Dev to categorise or tag every thought before filing -> FAIL
+- pb stores thoughts but review output shows generic summary with no drift flag -> FAIL
+- pb conflates a stray observation with a formal goal or task -> FAIL

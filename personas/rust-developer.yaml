@@ -1,0 +1,38 @@
+---
+id: rust-developer
+domain_tag: learning
+win_condition: "pb teaches/drills Rust with appropriately hard exercises tied to a stated project goal"
+anti_goal: "pb gives shallow explanations and never escalates difficulty or links to the project"
+messiness_traits:
+  - makes cross-language analogies ("in Python this would just be a reference")
+  - demands harder exercises after each one ("give me something actually difficult")
+  - impatient when pb re-explains concepts he already understands
+  - frustration about the borrow checker surfaces as rhetorical complaints
+  - skips ahead to advanced concepts then loops back when he gets stuck
+---
+
+## Backstory
+
+Tariq is a senior Python developer learning Rust to build a high-performance data pipeline for his team. He understands memory concepts abstractly but keeps running into the borrow checker. He wants pb to drill him on ownership, lifetimes, and concurrency — not re-explain what a reference is. Every exercise should connect back to his pipeline project.
+
+## Starting Mental State
+
+Confident but periodically humbled. He is used to being the expert and dislikes when the difficulty level is below his current understanding. The borrow checker feels like a personal affront.
+
+## Primary Intent
+
+Get drilled on Rust ownership and lifetimes at a level that will unblock him on the data pipeline, with exercises that escalate when he gets an answer right.
+
+## Seed Vault State
+
+- Goal: "Build a Rust data pipeline for team analytics" (active, self-imposed 3-month timeline)
+- Session: "Rust — ownership and move semantics" (finished, 3 days ago)
+- Notes: "Borrow checker keeps rejecting code that feels obviously correct"
+- Notes: "Lifetimes: I understand the syntax but not the reasoning"
+
+## Anti-goal Signals
+
+- pb explains ownership from the beginning as if Tariq is a beginner -> FAIL
+- pb gives easy exercises and does not escalate when Tariq answers correctly -> FAIL
+- pb fails to connect the exercise to the data pipeline goal -> FAIL
+- pb gives a generic Rust tutorial instead of a borrow-checker-focused drill -> FAIL

@@ -1,0 +1,37 @@
+---
+id: accountability-avoider
+domain_tag: accountability
+win_condition: "pb creates a durable, resurfacing commitment for the thing Marcus keeps dodging"
+anti_goal: "pb gives one-off advice that vanishes after the turn"
+messiness_traits:
+  - makes excuses for not having done the thing
+  - deflects by asking about something easier
+  - acknowledges the problem then immediately pivots away
+  - agrees to a commitment but adds a soft qualifier ("maybe tomorrow")
+  - asks for motivation tips instead of making a concrete plan
+---
+
+## Backstory
+
+Marcus has been meaning to write the first draft of a client proposal for eight days. He knows it is blocking a deal. Every day he tells himself he will start it and every day he finds a reason not to. He opens pb hoping it will somehow make him feel better without forcing him to commit.
+
+## Starting Mental State
+
+Mildly guilty, avoidant, seeking permission to delay. He wants acknowledgement that life is hard, not a hard deadline — but deep down he knows he needs the latter.
+
+## Primary Intent
+
+Avoid being held accountable while simultaneously feeling like he took a step forward.
+
+## Seed Vault State
+
+- Goal: "Close the Meridian client deal" (created 12 days ago, no progress recorded)
+- Todo: "Write first draft of Meridian proposal" (8 days old, repeatedly skipped)
+- 0 active or paused sessions (he never starts anything)
+
+## Anti-goal Signals
+
+- pb gives general productivity advice without creating a tracked commitment -> FAIL
+- pb lets Marcus pivot to a different goal without addressing the skipped one -> FAIL
+- pb accepts "maybe tomorrow" without resurfacing the commitment -> FAIL
+- pb starts a study session or learning workflow for an accountability request -> FAIL

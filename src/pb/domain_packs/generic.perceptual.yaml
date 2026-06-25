@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.perceptual
+aliases:
+  - perceptual
+skill_kind: perceptual
+primary_frame: perceptual_discrimination
+secondary_frames:
+  - retrieval_probe
+  - deliberate_rep_loop
+subskills:
+  - target_cue_detection
+  - contrast_noticing
+  - category_discrimination
+  - confidence_calibration
+evidence_contract:
+  - mcq
+  - cloze
+  - sensory_log
+  - self_rubric
+feedback_sources:
+  - self_check
+  - answer_key
+  - llm_check
+opening_move: "Compare two examples inside `{topic}` and name the strongest cue that separates them."
+stop_condition: "Stop when the learner can reliably notice and label the key distinguishing cue in `{topic}`."
+coach_rules:
+  - "Use tight contrasts and force cue naming."
+  - "Prefer discrimination tasks over long explanation."
+  - "Track confidence separately from correctness."
+safety_notes: []
+legacy_template_file: evidence_generic.md

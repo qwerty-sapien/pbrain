@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.creative_artifact
+aliases:
+  - creative artifact
+skill_kind: creative_artifact
+primary_frame: artifact_recreation
+secondary_frames:
+  - case_application
+  - error_analysis
+subskills:
+  - reference_interpretation
+  - iteration
+  - constraint_handling
+  - critique
+  - revision
+evidence_contract:
+  - artifact_path
+  - before_after_comparison
+  - self_rubric
+  - free_text_answer
+feedback_sources:
+  - self_check
+  - llm_check
+  - coach_or_peer
+opening_move: "Recreate one narrow target outcome inside `{topic}` and compare it against the intended reference immediately."
+stop_condition: "Stop when the learner has produced one tangible artifact delta for `{topic}` and can critique it against the target."
+coach_rules:
+  - "Force artifact output, not just planning."
+  - "Use direct comparison to a reference or constraint."
+  - "Make critique concrete and revision-oriented."
+safety_notes: []
+legacy_template_file: evidence_generic.md

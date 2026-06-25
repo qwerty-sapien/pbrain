@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: programming.implementation
+aliases:
+  - programming
+  - implementation
+  - rust
+  - c++
+  - cpp
+nearby_terms:
+  - build
+  - feature
+  - api
+  - refactor
+skill_kind: engineering_build_debug
+primary_frame: artifact_recreation
+secondary_frames:
+  - worked_example_fading
+  - error_analysis
+subskills:
+  - interface_planning
+  - implementation_slicing
+  - test_or_build_feedback
+  - edge_case_handling
+  - integration_check
+evidence_contract:
+  - artifact_path
+  - debug_trace
+  - free_text_answer
+  - self_rubric
+feedback_sources:
+  - compiler_or_test
+  - llm_check
+  - self_check
+opening_move: "Name the smallest shippable slice of `{topic}` you can implement now, state the acceptance check, and build only that slice first."
+stop_condition: "Stop when the learner has implemented one narrow slice for `{topic}` and checked it against a build, test, or artifact output."
+coach_rules:
+  - "Prefer the smallest verifiable slice over speculative architecture."
+  - "Ask for build/test output when available."
+  - "Treat missing acceptance checks as a primary gap."
+safety_notes: []
+legacy_template_file: evidence_rust.md

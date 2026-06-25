@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.procedural_cognitive
+aliases:
+  - procedural cognitive
+skill_kind: procedural_cognitive
+primary_frame: worked_example_fading
+secondary_frames:
+  - deliberate_rep_loop
+  - error_analysis
+subskills:
+  - setup
+  - procedure_choice
+  - execution
+  - verification
+evidence_contract:
+  - worked_solution
+  - free_text_answer
+  - mcq
+  - self_rubric
+feedback_sources:
+  - llm_check
+  - self_check
+  - answer_key
+opening_move: "Do one full rep of `{topic}` with every step visible, then isolate the first mistake or hesitation point."
+stop_condition: "Stop when the learner can complete one representative procedure in `{topic}` with a visible check."
+coach_rules:
+  - "Prefer one visible rep over broad discussion."
+  - "Name the first failure point, then rerun only that slice."
+  - "Require an explicit verification step."
+safety_notes: []
+legacy_template_file: evidence_generic.md

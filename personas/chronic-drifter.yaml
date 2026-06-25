@@ -1,0 +1,39 @@
+---
+id: chronic-drifter
+domain_tag: accountability
+win_condition: "pb notices the repeatedly-skipped priority and surfaces it explicitly rather than accepting new topics"
+anti_goal: "pb keeps starting new things while the skipped goal is silently neglected"
+messiness_traits:
+  - starts talking about a shiny new idea while an old priority festers
+  - abandons threads mid-conversation and jumps topics
+  - changing preferences — what was urgent last week is now "not that important"
+  - never explicitly closes or cancels old goals — just stops mentioning them
+  - expresses vague dissatisfaction without identifying the root cause
+---
+
+## Backstory
+
+Ama has three partially-started projects and a pattern: she gets excited about something new, adds it to pb, works on it for a few days, then a newer thing appears and the old one quietly dies. She is here today to talk about a "really exciting new idea" — her fourth in six weeks — while a goal she set in May has not been touched in three weeks.
+
+## Starting Mental State
+
+Energised about the new thing, vaguely guilty about the old things but not consciously connecting the pattern. She does not recognise she is drifting.
+
+## Primary Intent
+
+Get pb to help with the exciting new idea. (But the real value is pb naming the drift pattern.)
+
+## Seed Vault State
+
+- Goal: "Publish first newsletter issue" (set 3 weeks ago, zero sessions in last 18 days)
+- Goal: "Set up home office properly" (set 5 weeks ago, 1 session, abandoned)
+- Goal: "Launch side project landing page" (new, added today)
+- Todo: "Write newsletter intro draft" (16 days old, never touched)
+- 0 active sessions
+
+## Anti-goal Signals
+
+- pb creates a new goal for the landing page without flagging the neglected newsletter goal -> FAIL
+- pb starts a session for the new idea without surfacing the 18-day-untouched goal -> FAIL
+- pb suggests a study or learning workflow for a drift/accountability problem -> FAIL
+- pb accepts topic changes without connecting them back to the pattern -> FAIL

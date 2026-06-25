@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: universal.fallback
+aliases:
+  - fallback
+skill_kind: mixed
+primary_frame: case_application
+secondary_frames:
+  - retrieval_probe
+subskills:
+  - scope_definition
+  - attempt_visibility
+  - feedback_capture
+  - next_move
+evidence_contract:
+  - free_text_answer
+  - self_rubric
+feedback_sources:
+  - self_check
+  - llm_check
+opening_move: "Make one visible attempt on `{topic}` immediately and describe the first concrete signal that tells you whether it worked."
+stop_condition: "Stop when the learner has produced one visible attempt for `{topic}` and named a concrete next adjustment."
+coach_rules:
+  - "Avoid generic academic filler."
+  - "Force one visible attempt before broad discussion."
+  - "Turn the first concrete signal into the next move."
+safety_notes: []
+legacy_template_file: evidence_generic.md
