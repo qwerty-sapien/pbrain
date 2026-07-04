@@ -22,6 +22,12 @@ These model IDs are known working and must not be guessed or renamed:
 
 ## Configuration Surfaces
 
+Fast inference roles default to the lightweight model for the active provider:
+
+- Gemini: `gemini-3.1-flash-lite-preview`
+- OpenAI: `gpt-5.4-nano`
+- Anthropic/Claude: `claude-haiku-4-5-20251001`
+
 Preferred:
 
 ```bash

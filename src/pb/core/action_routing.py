@@ -19,7 +19,7 @@ from pb.core.entity_refs import display_ref
 from pb.core.model_policy import resolve_model_binding
 from pb.core.models import utc_now
 from pb.core.learning_metadata import parse_learning_task_metadata
-from pb.core.scope_resolution import match_goal, match_track
+from pb.core.scope_resolution import content_tokens, match_goal, match_track
 from pb.llm.runtime import LLMRuntime
 from pb.storage.config import get_config
 
@@ -355,7 +355,7 @@ def _text_match_score(intent: str, *haystacks: str) -> float:
     lowered = _normalized(intent)
     if not lowered:
         return 0.0
-    intent_tokens = _token_set(lowered)
+    intent_content = content_tokens(intent)
     best = 0.0
     for haystack in haystacks:
         lowered_haystack = _normalized(haystack)
@@ -364,12 +364,16 @@ def _text_match_score(intent: str, *haystacks: str) -> float:
         if lowered == lowered_haystack:
             best = max(best, 1.0)
             continue
-        if lowered in lowered_haystack or lowered_haystack in lowered:
+        # Exact-phrase containment only counts when the intent carries real
+        # content — never on filler words alone.
+        if intent_content and (lowered in lowered_haystack or lowered_haystack in lowered):
             best = max(best, 0.82)
-        hay_tokens = _token_set(lowered_haystack)
-        overlap = len(intent_tokens & hay_tokens)
+        hay_content = content_tokens(haystack)
+        if not intent_content or not hay_content:
+            continue
+        overlap = len(intent_content & hay_content)
         if overlap:
-            score = overlap / max(1, len(intent_tokens))
+            score = overlap / max(1, len(intent_content))
             best = max(best, min(0.78, 0.18 + score))
     return best
 

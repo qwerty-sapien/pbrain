@@ -17,6 +17,16 @@ Do
 
 Use `pb do` when the sentence in your head is not yet a command.
 
+## Start From Learn
+
+```text
+> pb learn "matrix diagonalization"
+Do
+1. Study matrix diagonalization
+   Run: pb study 'matrix diagonalization'
+   Why: Build the concept before drilling procedures.
+```
+
 ## Start Conceptual Study
 
 ```text
@@ -36,6 +46,11 @@ Steps:
 ```
 
 Use `--understand`, `--apply`, `--evaluate`, or `--create` when you want to steer Bloom stage explicitly.
+
+```text
+> pb study recall "Bayes theorem"
+Study recall scope: Bayes theorem
+```
 
 ## Drill A Skill
 
@@ -105,7 +120,7 @@ Status: ok
 Scope boundary: Use only the uploaded source material from bayes.md.
 
 > pb context add notes/bayes.md
-Stored source: ... -> vault://sources/.../bayes.md
+Stored source: bayes.md -> vault://source/bayes.md
 
 > pb context lock
 Locked context: general learning

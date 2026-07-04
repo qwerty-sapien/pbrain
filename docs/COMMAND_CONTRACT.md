@@ -87,4 +87,6 @@ The MCP server should prefer semantic tools over raw CLI execution:
 - context build and scoped packets
 - Anki candidate generation
 
-`pb_command` is a debug escape hatch, not the normal agent interface.
+`pb_command` is a debug escape hatch, not the normal agent interface. It must
+remain comprehensive enough to emulate the visible human CLI surface, while
+read-only MCP mode blocks commands that can mutate vault or SQLite state.

@@ -138,6 +138,15 @@ def _command_router_candidates(repo, intent: str):
     return routed or []
 
 
+def _plain_option_label(option: str) -> str:
+    normalized = (option or "").strip().lower()
+    if normalized == "save as thought":
+        return "Capture a quick thought (Save as thought)"
+    if normalized == "save as todo":
+        return "Capture an upcoming task (Save as todo)"
+    return option
+
+
 @app.callback(invoke_without_command=True)
 def do_command(
     ctx: typer.Context,
@@ -152,23 +161,7 @@ def do_command(
         intent = join_words(intent_words)
 
         if not intent:
-            from pb.core.action_routing import build_next_candidates
-            candidates = build_next_candidates(repo, limit=5)
-            if candidates:
-                if not is_interactive(ctx) or _prefer_plain_suggestions():
-                    for i, c in enumerate(candidates, 1):
-                        console.print(f"{i}. {c.human_label}")
-                else:
-                    selected = pick_single_choice(
-                        [(c.backing_command, c.human_label) for c in candidates],
-                        title="Choose action",
-                        text="What would you like to do?",
-                        details=[c.short_reason for c in candidates],
-                    )
-                    if selected:
-                        run_internal_command(ctx, selected)
-            else:
-                console.print("Nothing to do right now.")
+            run_internal_command(ctx, "next")
             return
 
         routed_candidates = _command_router_candidates(repo, intent)
@@ -194,11 +187,12 @@ def do_command(
         # Machine path: produce clean structured output (PRODUCTIVEBRAIN_SHELL_TEST_MODE)
         if not is_interactive(ctx) or _prefer_plain_suggestions():
             envelope = asyncio.run(dispatch(repo, intent))
+            console.print("[header]Do[/]")
             if envelope.prompt:
                 console.print(envelope.prompt)
             if envelope.options:
                 for i, opt in enumerate(envelope.options, 1):
-                    console.print(f"{i}. {opt}")
+                    console.print(f"{i}. {_plain_option_label(opt)}")
             return
 
         # Interactive path: full envelope rendering

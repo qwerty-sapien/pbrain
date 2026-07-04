@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -16,9 +17,12 @@ from pathlib import Path
 import typer
 
 from pb.cli.context import CommandContext
+from pb.core.context_classifier import classify_context_source
 from pb.core.context_file_intake import (
     ActiveContextScope,
+    CONTENT_PLACEHOLDER_SUMMARIES,
     ContextFileIngestResult,
+    SourceBundleItem,
     active_context_from_sources,
     compatibility_message,
     inspect_context_files,
@@ -39,6 +43,10 @@ class PreparedContextScope:
     blocking: bool = False
 
 
+SOURCE_REF_PREFIX = "vault://source/"
+OLD_SOURCE_REF_PREFIX = "vault://sources/"
+
+
 def provider_and_model(cmd_ctx: CommandContext, override: str = "") -> tuple[str, str]:
     """Resolve the effective provider:model binding for context intake."""
 
@@ -53,6 +61,215 @@ def provider_and_model(cmd_ctx: CommandContext, override: str = "") -> tuple[str
     return runtime.default_binding()
 
 
+def _safe_source_filename(filename: str) -> str:
+    """Return a readable filesystem-safe source filename."""
+
+    clean = re.sub(r"[\\/]+", "-", (filename or "").strip())
+    clean = re.sub(r"[\x00-\x1f:]+", "-", clean)
+    clean = re.sub(r"\s+", " ", clean).strip(" .")
+    if not clean:
+        clean = "source"
+    stem = Path(clean).stem.strip(" .") or "source"
+    suffix = Path(clean).suffix.lower()
+    return f"{stem}{suffix}"
+
+
+def _source_ref(filename: str) -> str:
+    return f"{SOURCE_REF_PREFIX}{filename}"
+
+
+def _source_filename_from_ref(source_ref: str) -> str:
+    ref = (source_ref or "").strip()
+    if ref.startswith(SOURCE_REF_PREFIX):
+        return Path(ref.removeprefix(SOURCE_REF_PREFIX)).name
+    if ref.startswith(OLD_SOURCE_REF_PREFIX):
+        return Path(ref).name
+    return ""
+
+
+def _taken_source_filenames(repo, *, excluding_source_id: str = "") -> set[str]:
+    taken: set[str] = set()
+    for row in repo.list_context_sources():
+        if excluding_source_id and str(row.get("id", "")) == excluding_source_id:
+            continue
+        ref_name = _source_filename_from_ref(str(row.get("source_ref", "")))
+        stored_name = Path(str(row.get("stored_path", ""))).name
+        if ref_name:
+            taken.add(ref_name)
+        if stored_name and stored_name != "original":
+            taken.add(stored_name)
+    return taken
+
+
+def _dedupe_source_filename(source_dir: Path, filename: str, *, taken: set[str], current_path: Path | None = None) -> str:
+    safe = _safe_source_filename(filename)
+    stem = Path(safe).stem
+    suffix = Path(safe).suffix
+    candidate = safe
+    index = 2
+    while True:
+        candidate_path = source_dir / candidate
+        occupied = candidate in taken or (candidate_path.exists() and (current_path is None or candidate_path != current_path))
+        if not occupied:
+            return candidate
+        candidate = f"{stem}-{index}{suffix}"
+        index += 1
+
+
+def _context_result_payload(result: ContextFileIngestResult) -> dict[str, object]:
+    return result.model_dump(mode="json")
+
+
+def _payload_with_stored_ref(payload: dict[str, object], *, filename: str, source_ref: str) -> dict[str, object]:
+    updated = dict(payload)
+    parsed_files = []
+    for item in list(updated.get("parsed_files", []) or []):
+        if not isinstance(item, dict):
+            continue
+        parsed = dict(item)
+        if parsed.get("filename") == filename and not str(parsed.get("source_ref", "")).startswith("archive://"):
+            parsed["source_ref"] = source_ref
+        parsed_files.append(parsed)
+    updated["parsed_files"] = parsed_files
+    return updated
+
+
+def _payload_has_pdf_failure(payload: dict[str, object]) -> bool:
+    for item in list(payload.get("failed_files", []) or []):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("extension", "")).lower() == "pdf" or str(item.get("canonical_class", "")) == "document.pdf":
+            return True
+    return False
+
+
+def _old_source_path(runtime, row: dict[str, object]) -> Path | None:
+    candidates = [
+        Path(str(row.get("stored_path", ""))),
+        Path(str(row.get("original_path", ""))),
+    ]
+    for candidate in candidates:
+        if str(candidate) and candidate.exists() and candidate.is_file():
+            return candidate
+    source_id = str(row.get("id", ""))
+    filename = str(row.get("filename", ""))
+    suffix = Path(filename).suffix.lower()
+    legacy = runtime.vault_path / "sources" / source_id / f"original{suffix}"
+    if legacy.exists() and legacy.is_file():
+        return legacy
+    return None
+
+
+def _cleanup_legacy_source_path(runtime, old_path: Path, new_path: Path) -> None:
+    legacy_root = runtime.vault_path / "sources"
+    try:
+        old_path.relative_to(legacy_root)
+    except ValueError:
+        return
+    if old_path == new_path:
+        return
+    try:
+        old_path.unlink(missing_ok=True)
+    except OSError:
+        return
+    parent = old_path.parent
+    for _ in range(2):
+        if parent == legacy_root.parent:
+            break
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        if parent == legacy_root:
+            break
+        parent = parent.parent
+
+
+def normalize_context_source_storage(cmd_ctx: CommandContext) -> int:
+    """Normalize older context source rows into readable `vault/source/` storage."""
+
+    runtime = cmd_ctx.runtime
+    repo = cmd_ctx.repo
+    source_dir = runtime.vault_path / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    changed_refs: dict[str, str] = {}
+    normalized_count = 0
+
+    for row in repo.list_context_sources():
+        source_id = str(row.get("id", ""))
+        filename = _safe_source_filename(str(row.get("filename", "")) or "source")
+        old_ref = str(row.get("source_ref", ""))
+        old_path = _old_source_path(runtime, row)
+        stored_path = Path(str(row.get("stored_path", "")))
+        already_new = old_ref.startswith(SOURCE_REF_PREFIX) and stored_path.parent == source_dir
+        if already_new and not _payload_has_pdf_failure(dict(row.get("ingest_result", {}) or {})):
+            continue
+
+        current_path = stored_path if stored_path.parent == source_dir else None
+        target_name = _dedupe_source_filename(
+            source_dir,
+            filename,
+            taken=_taken_source_filenames(repo, excluding_source_id=source_id),
+            current_path=current_path,
+        )
+        target_path = source_dir / target_name
+        if old_path is not None and old_path != target_path:
+            shutil.copy2(old_path, target_path)
+            _cleanup_legacy_source_path(runtime, old_path, target_path)
+
+        new_ref = _source_ref(target_path.name)
+        provider, model = provider_and_model(cmd_ctx)
+        raw_payload = dict(row.get("ingest_result", {}) or {})
+        if target_path.exists() and (not raw_payload or _payload_has_pdf_failure(raw_payload)):
+            result = inspect_context_files([target_path], provider=provider, model=model, dryrun=False)
+            payload = _context_result_payload(result)
+        else:
+            try:
+                payload = _context_result_payload(ContextFileIngestResult.model_validate(raw_payload))
+            except Exception:
+                payload = raw_payload
+        payload = _payload_with_stored_ref(payload, filename=target_path.name, source_ref=new_ref)
+        metadata_path = source_dir / f"{target_path.stem}.ingest-result.json"
+        metadata_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+
+        updated = {
+            **row,
+            "filename": target_path.name,
+            "stored_path": str(target_path),
+            "normalized_path": str(metadata_path),
+            "source_ref": new_ref,
+            "ingest_result": payload,
+        }
+        repo.update_context_source(updated)
+        if old_ref and old_ref != new_ref:
+            changed_refs[old_ref] = new_ref
+        normalized_count += 1
+
+    if changed_refs:
+        for bundle in repo.list_source_bundles():
+            touched = False
+            updated_items: list[SourceBundleItem] = []
+            for item in bundle.items:
+                source_ref = changed_refs.get(item.source_ref, item.source_ref)
+                if source_ref != item.source_ref:
+                    touched = True
+                    item = item.model_copy(update={"source_ref": source_ref})
+                updated_items.append(item)
+            if touched:
+                for item in updated_items:
+                    repo.add_source_bundle_item(item)
+                bundle.source_refs = [item.source_ref for item in updated_items]
+                repo.update_source_bundle(bundle)
+
+        locked = repo.get_locked_context()
+        if locked is not None:
+            new_refs = [changed_refs.get(ref, ref) for ref in locked.source_refs]
+            if new_refs != locked.source_refs:
+                repo.set_locked_context(locked.model_copy(update={"source_refs": new_refs}))
+
+    return normalized_count
+
+
 def persist_context_source(
     cmd_ctx: CommandContext,
     path: Path,
@@ -61,22 +278,33 @@ def persist_context_source(
     domain_override: str = "",
     scope_override: str = "",
 ) -> dict[str, object]:
-    """Persist one inspected source under `vault/sources/` and record it in SQLite."""
+    """Persist one inspected source under `vault/source/` and record it in SQLite."""
 
     runtime = cmd_ctx.runtime
     repo = cmd_ctx.repo
+    normalize_context_source_storage(cmd_ctx)
     existing = repo.find_context_source(str(path))
     source_id = str(existing.get("id")) if existing is not None else generate_internal_id()
-    source_dir = runtime.vault_path / "sources" / source_id
+    source_dir = runtime.vault_path / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
 
-    stored_path = source_dir / f"original{path.suffix.lower()}"
-    inspect_json_path = source_dir / "ingest-result.json"
+    existing_stored = Path(str(existing.get("stored_path", ""))) if existing is not None else None
+    current_path = existing_stored if existing_stored is not None and existing_stored.parent == source_dir else None
+    source_filename = _dedupe_source_filename(
+        source_dir,
+        path.name,
+        taken=_taken_source_filenames(repo, excluding_source_id=source_id),
+        current_path=current_path,
+    )
+    stored_path = source_dir / source_filename
+    source_ref = _source_ref(source_filename)
+    inspect_json_path = source_dir / f"{Path(source_filename).stem}.ingest-result.json"
     shutil.copy2(path, stored_path)
-    payload = inspect_result.model_dump(mode="json")
+    payload = _context_result_payload(inspect_result)
+    payload = _payload_with_stored_ref(payload, filename=path.name, source_ref=source_ref)
     inspect_json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
     if str(payload.get("source_utility", "")) == "mixed_archive":
-        manifest_path = source_dir / "archive-manifest.txt"
+        manifest_path = source_dir / f"{Path(source_filename).stem}.archive-manifest.txt"
         parsed_names = [
             str(item.get("filename", ""))
             for item in payload.get("parsed_files", [])
@@ -87,7 +315,7 @@ def persist_context_source(
     domain_resolution = payload.get("domain_resolution", {})
     record = {
         "id": source_id,
-        "filename": path.name,
+        "filename": source_filename,
         "original_path": str(path),
         "stored_path": str(stored_path),
         "normalized_path": str(inspect_json_path),
@@ -108,12 +336,63 @@ def persist_context_source(
         "domain_id": domain_resolution.get("domain_id"),
         "domain_name": domain_override or domain_resolution.get("domain_name") or domain_resolution.get("new_domain_name"),
         "scope_boundary": scope_override or domain_resolution.get("scope_boundary") or "",
-        "source_ref": f"vault://sources/{source_id}/{path.name}",
+        "source_ref": source_ref,
         "ingest_result": payload,
     }
     if existing is not None:
         return repo.update_context_source(record)
     return repo.create_context_source(record)
+
+
+def enrich_result_with_classification(
+    cmd_ctx: CommandContext,
+    result: ContextFileIngestResult,
+    *,
+    domain_override: str = "",
+    scope_override: str = "",
+) -> None:
+    """Replace filename-guessed domain/scope with real LLM content classification.
+
+    Best-effort and fail-safe: when offline, unconfigured, or on any error the
+    ``result`` is left exactly as the deterministic intake produced it, so
+    ``pb context add`` never breaks because of the classifier.
+    """
+
+    if domain_override and scope_override:
+        return
+    primary = None
+    for parsed in result.parsed_files:
+        summary = (parsed.content_summary or "").strip()
+        if summary and summary not in CONTENT_PLACEHOLDER_SUMMARIES:
+            primary = parsed
+            break
+    if primary is None:
+        return
+    try:
+        classification = classify_context_source(
+            LLMRuntime(cmd_ctx.config),
+            filename=primary.filename,
+            excerpt=primary.content_summary,
+        )
+    except Exception:
+        classification = None
+    if classification is None:
+        return
+
+    topic = classification.topic_summary.strip()
+    if topic:
+        primary.content_summary = topic
+    resolution = result.domain_resolution
+    if not domain_override:
+        domain = classification.domain_name.strip()
+        if domain:
+            resolution.domain_name = domain
+            if resolution.new_domain_name:
+                resolution.new_domain_name = domain
+    if not scope_override:
+        boundary = classification.scope_boundary.strip()
+        if boundary:
+            resolution.scope_boundary = boundary
 
 
 def ingest_context_source(
@@ -129,7 +408,13 @@ def ingest_context_source(
 
     provider, model = provider_and_model(cmd_ctx, model_override)
     result = inspect_context_files([path], provider=provider, model=model, dryrun=dryrun)
-    payload = result.model_dump(mode="json")
+    enrich_result_with_classification(
+        cmd_ctx,
+        result,
+        domain_override=domain_override,
+        scope_override=scope_override,
+    )
+    payload = _context_result_payload(result)
     if dryrun:
         domain_resolution = payload.get("domain_resolution", {})
         return {

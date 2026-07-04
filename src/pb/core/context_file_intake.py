@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 from pb.core.models import generate_internal_id
 from pb.core.scope_resolution import list_knowledge_domains, match_domain_name
@@ -65,6 +65,17 @@ class ParsedContextFile(BaseModel):
     content_summary: str
     source_ref: str
     parse_confidence: Literal["high", "medium", "low"]
+    is_searchable: bool | None = Field(default=None, serialization_alias="isSearchable", validation_alias="isSearchable")
+
+    @model_serializer(mode="wrap")
+    def _serialize_pdf_metadata(self, handler):
+        data = handler(self)
+        value = data.pop("is_searchable", None)
+        if value is None:
+            data.pop("isSearchable", None)
+        else:
+            data["isSearchable"] = value
+        return data
 
 
 class FailedContextFile(BaseModel):
@@ -81,7 +92,6 @@ class FailedContextFile(BaseModel):
         "unsupported_mime",
         "unsupported_extension",
         "encrypted_or_corrupt",
-        "ocr_needed",
         "unknown",
     ]
     failure_reason_user_safe: str
@@ -1057,22 +1067,6 @@ def _inspect_one_path(
     source_ref = f"file://{path}"
     if canonical_class == "archive.bundle":
         return _inspect_archive(path, provider=provider, model=model)
-    if canonical_class == "document.pdf" and _pdf_needs_ocr(path):
-        return {
-            "parsed": [],
-            "failed": [
-                FailedContextFile(
-                    filename=path.name,
-                    extension=path.suffix.lower().lstrip("."),
-                    mime_type=mime_type,
-                    size_mb=size_mb,
-                    canonical_class=canonical_class,
-                    failure_stage="ocr_needed",
-                    failure_reason_user_safe="This PDF appears to need OCR or a searchable text layer before ProductiveBrain can use it.",
-                )
-            ],
-            "canonical_classes": [canonical_class],
-        }
     if canonical_class in {"document.office.word", "document.office.presentation", "document.office.spreadsheet", "unknown"}:
         failure_stage = "unsupported_extension" if canonical_class == "unknown" else "model_could_not_read"
         failure_reason = "This file type is not supported yet."
@@ -1110,6 +1104,7 @@ def _inspect_one_path(
                 content_summary=summary,
                 source_ref=source_ref,
                 parse_confidence="high" if summary else "medium",
+                isSearchable=True if canonical_class == "document.pdf" else None,
             )
         ],
         "failed": [],
@@ -1161,7 +1156,7 @@ def _inspect_archive(path: Path, *, provider: str, model: str) -> dict[str, list
                             size_mb=round((member.file_size or 0) / (1024 * 1024), 3),
                             canonical_class=canonical_class,
                             failure_stage="model_could_not_read",
-                            failure_reason_user_safe="Extracted PDF children need to be added directly so OCR and text checks can run safely.",
+                            failure_reason_user_safe="Extracted PDF children need to be added directly so source metadata stays auditable.",
                         )
                     )
                     continue
@@ -1224,27 +1219,46 @@ def _safe_archive_member(name: str) -> PurePosixPath | None:
     return clean
 
 
-def _pdf_needs_ocr(path: Path) -> bool:
+PDF_PLACEHOLDER_SUMMARY = "Searchable PDF source material."
+IMAGE_PLACEHOLDER_SUMMARY = "Raster image source material."
+CONTENT_PLACEHOLDER_SUMMARIES = frozenset(
+    {"", PDF_PLACEHOLDER_SUMMARY, IMAGE_PLACEHOLDER_SUMMARY}
+)
+
+
+def extract_pdf_text(path: Path, *, max_pages: int = 4, max_chars: int = 1600) -> str:
+    """Return a cleaned text excerpt from the first pages of a PDF.
+
+    Returns "" when the PDF has no extractable text layer (e.g. a scanned scan
+    that needs OCR) or when pypdf is unavailable, so callers can fall back to the
+    placeholder summary.
+    """
+
     try:
-        data = path.read_bytes()
-    except OSError:
-        return True
-    if b"/Font" not in data and b"BT" not in data:
-        return True
-    if re.search(rb"\(([^)]{4,})\)\s*Tj", data):
-        return False
-    if re.search(rb"\[(.*?)\]\s*TJ", data, flags=re.DOTALL):
-        return False
-    if re.search(rb"/ToUnicode", data):
-        return False
-    return True
+        from pypdf import PdfReader
+    except Exception:
+        return ""
+    try:
+        reader = PdfReader(str(path))
+    except Exception:
+        return ""
+    chunks: list[str] = []
+    for page in reader.pages[:max_pages]:
+        try:
+            chunks.append(page.extract_text() or "")
+        except Exception:
+            continue
+        if sum(len(chunk) for chunk in chunks) >= max_chars:
+            break
+    clean = re.sub(r"\s+", " ", " ".join(chunks)).strip()
+    return clean[:max_chars]
 
 
 def _content_summary(path: Path, *, canonical_class: str) -> str:
     if canonical_class == "document.pdf":
-        return "Searchable PDF source material."
+        return extract_pdf_text(path) or PDF_PLACEHOLDER_SUMMARY
     if canonical_class == "image.raster":
-        return "Raster image source material."
+        return IMAGE_PLACEHOLDER_SUMMARY
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:

@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -137,6 +139,7 @@ class LearningPartnerSession:
         clarifier_answers: dict[str, str] | None = None,
         mode: str = "",
         verbose: bool = False,
+        confidence_level: float = 0.0,
         max_options: int = 5,           # D-16-25: 6/8/10 for practice hard difficulty
         pb_command_resolver: PbCommandResolver | None = None,
     ):
@@ -151,6 +154,7 @@ class LearningPartnerSession:
         self.domain = domain
         self.mode = mode or branch
         self.verbose = verbose
+        self.confidence_level = max(0.0, min(1.0, float(confidence_level)))
         self.max_options = max_options
         self.clarifier_answers = clarifier_answers or {}
         self.console = get_console()
@@ -185,6 +189,7 @@ class LearningPartnerSession:
             domain=domain,
             mode=mode,
             clarifier_answers=self.clarifier_answers,
+            confidence_level=self.confidence_level,
         )
         self.command_registry = self._build_command_registry()
         self._mark_partner_session_used()
@@ -317,6 +322,8 @@ class LearningPartnerSession:
             ("/context", "Manage context lock and status from inside the lesson."),
             ("/lock", "Lock the current lesson context for future commands."),
             ("/unlock", "Unlock the currently locked context."),
+            ("/spawn", "Spawn or revive the best domain agent for this session."),
+            ("/forget", "Archive the current domain agent without deleting history."),
         ]
 
     def _build_command_registry(self) -> CommandRegistry:
@@ -420,6 +427,18 @@ class LearningPartnerSession:
             return self._render_context_feedback([f"Locked context: {summarize_context_label(scope)}"])
         return self._render_context_feedback(["Use `/context status`, `/context lock`, `/context lock <bundle>`, or `/context unlock`."])
 
+    def _spawn_command(self) -> LearningPartnerTurnDraft:
+        from pb.core.agent_lifecycle import AgentLifecycleSuggester
+
+        result = AgentLifecycleSuggester(self.repo).spawn_or_respawn(session=self.session)
+        return self._render_context_feedback([result.message])
+
+    def _forget_agent_command(self) -> LearningPartnerTurnDraft:
+        from pb.core.agent_lifecycle import AgentLifecycleSuggester
+
+        result = AgentLifecycleSuggester(self.repo).forget(session=self.session)
+        return self._render_context_feedback([result.message])
+
     def run_contextual_command(self, command: str, args: str = "") -> LearningPartnerTurnDraft | None:
         """Execute one contextual slash command over the current lesson state."""
         if command == "/hint":
@@ -447,6 +466,10 @@ class LearningPartnerSession:
             turn = self._context_command("lock")
         elif command == "/unlock":
             turn = self._context_command("unlock")
+        elif command == "/spawn":
+            turn = self._spawn_command()
+        elif command == "/forget":
+            turn = self._forget_agent_command()
         else:
             return None
         return self._record_contextual_turn(turn)
@@ -526,8 +549,10 @@ class LearningPartnerSession:
         _feynman_opening = getattr(self, "_feynman_opening", "")
         active_reply = _feynman_opening if _feynman_opening else turn.reply
         if active_reply.strip():
-            question_block.append(Text("Question", style="bold white"))
-            question_block.append(Text(renderable_cli_text(active_reply).strip(), style="white"))
+            question_block.append(Text("Question", style="bold bright_white"))
+            question_block.extend(
+                self._readable_text_blocks(active_reply, style="white", first_style="bold bright_white")
+            )
 
         footer = Text()
         footer.append("Commands: ", style="bold white")
@@ -540,7 +565,8 @@ class LearningPartnerSession:
         if progress_line.plain.strip():
             elements.append(progress_line)
         if page is not None and page.intro_text.strip():
-            elements.extend([Text(), Text(page.intro_text.strip(), style="dim")])
+            elements.extend([Text(), Text("Page focus", style="bold bright_white")])
+            elements.extend(self._readable_text_blocks(page.intro_text, style="white", first_style="bold white"))
         if question_lines:
             elements.extend([Text(), Text("Page status", style="bold white"), *question_lines])
         if feedback_lines:
@@ -567,6 +593,53 @@ class LearningPartnerSession:
                 expand=True,
             )
         )
+
+    def _readable_text_blocks(
+        self,
+        value: str,
+        *,
+        style: str = "white",
+        first_style: str = "bold bright_white",
+        max_lines_per_paragraph: int = 5,
+        line_spacing: int = 1,
+    ) -> list[Text]:
+        """Return chunked Rich text blocks for dense lesson prose."""
+
+        clean = renderable_cli_text(value).strip()
+        if not clean:
+            return []
+        width = max(44, min(92, int(getattr(self.console, "width", 80) or 80) - 10))
+        blocks: list[Text] = []
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", clean) if part.strip()] or [clean]
+        for paragraph_index, paragraph in enumerate(paragraphs):
+            wrapped: list[str] = []
+            for raw_line in paragraph.splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                wrapped.extend(
+                    textwrap.wrap(
+                        raw_line,
+                        width=width,
+                        break_long_words=False,
+                        break_on_hyphens=False,
+                    )
+                    or [raw_line]
+                )
+            for start in range(0, len(wrapped), max_lines_per_paragraph):
+                chunk = wrapped[start:start + max_lines_per_paragraph]
+                for line_index, line in enumerate(chunk):
+                    emphasis = first_style if paragraph_index == 0 and start == 0 and line_index == 0 else style
+                    blocks.append(Text(line, style=emphasis))
+                    for _ in range(max(0, line_spacing - 1)):
+                        blocks.append(Text())
+                if start + max_lines_per_paragraph < len(wrapped):
+                    blocks.append(Text())
+            if paragraph_index < len(paragraphs) - 1:
+                blocks.append(Text())
+        while blocks and not blocks[-1].plain.strip():
+            blocks.pop()
+        return blocks
 
     def _render_turn(self, turn: LearningPartnerTurnDraft) -> None:
         """Compatibility wrapper for direct render calls."""
@@ -642,7 +715,7 @@ class LearningPartnerSession:
 
         if question_type == "mcq" and options:
             selected = pick_single_choice(
-                [(option, option) for option in options],
+                [(option, renderable_cli_text(option)) for option in options],
                 title="Choose one",
                 text="Use arrows or digits, or type your own answer.",
                 allow_inline_edit=True,
@@ -660,8 +733,9 @@ class LearningPartnerSession:
                     typed = str(selected.value or "").strip()
                     if not typed:
                         return None
-                    if typed.startswith("/"):
-                        return RoutedInput(kind="slash_command", command=typed)
+                    routed = self._classify_inline_text(typed)
+                    if routed.kind != "answer":
+                        return routed
                     return RoutedInput(kind="answer", text=typed)
                 selected = str(selected.value or "")
             if not selected:
@@ -670,7 +744,7 @@ class LearningPartnerSession:
 
         if question_type == "multi_select" and options:
             selected = pick_many_choices(
-                [(option, option) for option in options],
+                [(option, renderable_cli_text(option)) for option in options],
                 title="Select all that apply",
                 text="Toggle with digits or arrows, then confirm.",
                 allow_inline_edit=True,
@@ -692,7 +766,7 @@ class LearningPartnerSession:
 
         if question_type == "cloze" and cloze_options:
             selected = pick_single_choice(
-                [(option, option) for option in cloze_options],
+                [(option, renderable_cli_text(option)) for option in cloze_options],
                 title="Fill in the blank",
                 text="Choose the best fit for the blank.",
                 allow_inline_edit=True,
@@ -710,8 +784,9 @@ class LearningPartnerSession:
                     typed = str(selected.value or "").strip()
                     if not typed:
                         return None
-                    if typed.startswith("/"):
-                        return RoutedInput(kind="slash_command", command=typed)
+                    routed = self._classify_inline_text(typed)
+                    if routed.kind != "answer":
+                        return routed
                     return RoutedInput(kind="answer", text=typed)
                 selected = str(selected.value or "")
             if not selected:
@@ -727,6 +802,18 @@ class LearningPartnerSession:
                 allow_navigation=True,
             )
         return None
+
+    def _classify_inline_text(self, typed: str) -> RoutedInput:
+        """Classify typed picker text before treating it as a lesson answer."""
+
+        return classify_interactive_input(
+            typed,
+            pb_command_resolver=self.pb_command_resolver,
+            slash_registry=self.command_registry,
+            active_learning=True,
+            allow_shell_commands=False,
+            allow_nl_dispatch=False,
+        )
 
     def _record_exchange(self, user_text: str, turn: LearningPartnerTurnDraft) -> None:
         self._capture_user_input_evidence(user_text)

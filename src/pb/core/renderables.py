@@ -156,17 +156,43 @@ _SYMBOL_RENDER = {
     "pm": "±",
     "mp": "∓",
     "leq": "≤",
+    "le": "≤",
     "geq": "≥",
+    "ge": "≥",
     "neq": "≠",
+    "ne": "≠",
     "approx": "≈",
+    "cong": "≅",
+    "sim": "~",
     "to": "→",
     "rightarrow": "→",
     "leftarrow": "←",
+    "Rightarrow": "⟹",
+    "Leftarrow": "⟸",
+    "Leftrightarrow": "⟺",
     "mapsto": "↦",
     "langle": "⟨",
     "rangle": "⟩",
     "int": "∫",
     "wedge": "∧",
+    "in": "∈",
+    "notin": "∉",
+    "mid": "|",
+    "vert": "|",
+    "lvert": "|",
+    "rvert": "|",
+    "forall": "∀",
+    "exists": "∃",
+    "subset": "⊂",
+    "subseteq": "⊆",
+    "supset": "⊃",
+    "supseteq": "⊇",
+    "cup": "∪",
+    "cap": "∩",
+    "emptyset": "∅",
+    "varnothing": "∅",
+    "ldots": "…",
+    "cdots": "⋯",
 }
 
 _MATHBB_MAP = {
@@ -323,6 +349,7 @@ def _latex_to_terminal(text: str) -> str:
     rendered = rendered.replace("\\:", " ")
     rendered = rendered.replace("\\!", "")
     rendered = rendered.replace("\\\\", "\n")
+    rendered = rendered.replace("\\{", "{").replace("\\}", "}")
 
     rendered = _replace_nested_macro(rendered, "frac", lambda a, b: f"({a})/({b})")
     rendered = _replace_single_brace_macro(rendered, "sqrt", lambda inner: f"sqrt({inner})")
@@ -537,6 +564,7 @@ def _apply_bare_math_notation(text: str) -> str:
     result = result.replace("\\;", " ")
     result = result.replace("\\:", " ")
     result = result.replace("\\!", "")
+    result = result.replace("\\{", "{").replace("\\}", "}")
     # Handle \mathbb in bare text
     result = re.sub(
         r"\\mathbb\{([A-Z])\}",

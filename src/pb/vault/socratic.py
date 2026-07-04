@@ -313,6 +313,8 @@ class SocraticDebriefEngine:
         lines.append("- Ask exactly ONE question")
         lines.append("- Coaching partner tone: warm, specific, curious")
         lines.append("- Reference specific topics from the domain context when possible")
+        lines.append("- Use explicit LaTeX delimiters for every mathematical or formula-like expression: $...$ inline, $$...$$ display; keep leading backslashes on LaTeX commands such as \\mathbb")
+        lines.append("- Never emit pseudo-math such as S'_i, f_i(...), Pa(S'_i), or plain ASCII equations when LaTeX is appropriate")
         lines.append("- Keep under 2 sentences")
         return "\n".join(lines)
 
@@ -355,6 +357,8 @@ class SocraticDebriefEngine:
         lines.append("- This is teaching, not a diagnostic or interrogation")
         lines.append("- Progress from orienting -> explaining -> applying -> checking")
         lines.append("- Keep the tone warm, specific, and confidence-building")
+        lines.append("- Use explicit LaTeX delimiters for every mathematical or formula-like expression: $...$ inline, $$...$$ display; keep leading backslashes on LaTeX commands such as \\mathbb")
+        lines.append("- Never emit pseudo-math such as S'_i, f_i(...), Pa(S'_i), or plain ASCII equations when LaTeX is appropriate")
         lines.append("- Keep under 2 sentences")
         return "\n".join(lines)
 
@@ -443,6 +447,8 @@ class SocraticDebriefEngine:
         lines.append("- Be strict: reject vague answers and probe assumptions")
         lines.append("- Prefer short, precise questions; do not answer your own question")
         lines.append("- Avoid lists, labels, commentary, praise, or preambles")
+        lines.append("- Use explicit LaTeX delimiters for every mathematical or formula-like expression: $...$ inline, $$...$$ display; keep leading backslashes on LaTeX commands such as \\mathbb")
+        lines.append("- Never emit pseudo-math such as S'_i, f_i(...), Pa(S'_i), or plain ASCII equations when LaTeX is appropriate")
         lines.append("- Keep each question under 3 sentences")
         lines.append("- Do not stop before at least 8 answered rounds unless the user clearly exits")
         remaining_seconds = self.time_remaining_seconds

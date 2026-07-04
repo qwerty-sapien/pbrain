@@ -16,51 +16,83 @@ def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
 
 
+# Function words and generic request framing. Overlap on these must NOT count as
+# a topic match, otherwise a vague request like "about the paper" scores against
+# every existing goal on filler words and gets adopted by an unrelated goal.
+STOPWORDS = frozenset({
+    "a", "an", "the", "of", "and", "or", "to", "in", "on", "for", "with",
+    "about", "into", "from", "by", "as", "at", "is", "are", "am", "be",
+    "been", "being", "this", "that", "these", "those", "i", "we", "you",
+    "it", "he", "she", "they", "me", "us", "my", "our", "your", "their",
+    "its", "do", "does", "did", "have", "has", "had", "want", "wants",
+    "need", "needs", "like", "would", "could", "should", "can", "will",
+    "please", "lets", "let", "learn", "learning", "study", "studying",
+    "practise", "practice", "practising", "practicing", "teach", "teaching",
+    "understand", "master", "how", "what", "why", "when", "where", "which",
+    "who", "paper", "topic", "thing", "stuff", "some", "more", "help",
+})
+
+
+def content_tokens(text: str) -> set[str]:
+    """Return meaningful (non-stopword, length>1) tokens from free text."""
+
+    tokens = {token for token in re.split(r"[^a-z0-9]+", (text or "").lower()) if token}
+    return {token for token in tokens if token not in STOPWORDS and len(token) > 1}
+
+
+def _shares_content(needle_content: set[str], *haystacks: str) -> bool:
+    """True when the needle shares at least one content token with a haystack."""
+
+    if not needle_content:
+        return False
+    return any(needle_content & content_tokens(hay) for hay in haystacks if hay)
+
+
 def match_goal(repo, subject: str, *, allowed_modes: Optional[Iterable[str]] = None):
-    needle = (subject or "").lower().strip()
-    if not needle:
+    needle_content = content_tokens(subject)
+    if not needle_content:
         return None
     allowed = {item.lower() for item in allowed_modes} if allowed_modes else None
     for goal in repo.list_goal_arcs(status=None):
         mode = (getattr(goal, "execution_mode", "") or "mixed").lower()
         if allowed is not None and mode not in allowed:
             continue
-        haystacks = [
+        if _shares_content(
+            needle_content,
             getattr(goal, "title", ""),
             getattr(goal, "domain", ""),
             getattr(goal, "description", ""),
-        ]
-        lowered = [item.lower() for item in haystacks if item]
-        if any(needle in hay or hay in needle for hay in lowered):
+        ):
             return goal
     return None
 
 
 def match_track(repo, subject: str):
-    needle = (subject or "").lower().strip()
-    if not needle:
+    needle_content = content_tokens(subject)
+    if not needle_content:
         return None
     for track in repo.list_tracks(active_only=True):
-        haystacks = [getattr(track, "name", ""), getattr(track, "description", "")]
-        lowered = [item.lower() for item in haystacks if item]
-        if any(needle in hay or hay in needle for hay in lowered):
+        if _shares_content(
+            needle_content,
+            getattr(track, "name", ""),
+            getattr(track, "description", ""),
+        ):
             return track
     return None
 
 
 def matching_goals(repo, raw_request: str, *, limit: int = 3) -> list[dict[str, str]]:
-    needle = (raw_request or "").strip().lower()
+    needle_content = content_tokens(raw_request)
     matches: list[dict[str, str]] = []
-    if not needle:
+    if not needle_content:
         return matches
     for goal in repo.list_goal_arcs(status=None):
-        haystacks = [
+        if _shares_content(
+            needle_content,
             getattr(goal, "title", ""),
             getattr(goal, "domain", ""),
             getattr(goal, "description", ""),
-        ]
-        lowered = [item.lower() for item in haystacks if item]
-        if any(needle in hay or hay in needle for hay in lowered):
+        ):
             matches.append(
                 {
                     "title": getattr(goal, "title", ""),

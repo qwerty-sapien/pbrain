@@ -59,6 +59,7 @@ class ConfirmationDecision:
 
 
 _YES_WORDS = {
+    "`",
     "y",
     "yes",
     "yeah",
@@ -78,6 +79,7 @@ _YES_WORDS = {
     "execute",
 }
 _NO_WORDS = {
+    "q",
     "n",
     "no",
     "nope",
@@ -118,6 +120,8 @@ def _read_key() -> str:
             return "enter"
         if ch == " ":
             return "space"
+        if ch == "`":
+            return "backtick"
         if ch == "\x0f":
             return "ctrl-o"
         if ch in ("\x08", "\x7f"):
@@ -181,6 +185,43 @@ def _wrap_picker_text(text: str, width: int, prefix: str) -> list[str]:
             active_prefix = prefix if idx == 0 else continuation_prefix
             lines.append(_truncate_to_width(f"{active_prefix}{chunk}", width))
     return lines
+
+
+def _wrap_picker_preview_text(text: str, width: int, prefix: str) -> list[str]:
+    """Wrap detail-preview prose with extra spacing and five-line chunks."""
+
+    available = max(16, min(72, (width - len(prefix) - 1) // 2 or 16))
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", str(text or "")) if part.strip()] or [""]
+    lines: list[str] = []
+    continuation_prefix = " " * len(prefix)
+    for paragraph_index, paragraph in enumerate(paragraphs):
+        paragraph_lines: list[str] = []
+        for raw_line in paragraph.splitlines():
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            paragraph_lines.extend(
+                textwrap.wrap(
+                    raw_line,
+                    width=available,
+                    break_long_words=True,
+                    break_on_hyphens=False,
+                )
+                or [""]
+            )
+        for start in range(0, len(paragraph_lines), 5):
+            chunk = paragraph_lines[start:start + 5]
+            for idx, chunk_line in enumerate(chunk):
+                active_prefix = prefix if idx == 0 and start == 0 else continuation_prefix
+                lines.append(_truncate_to_width(f"{active_prefix}{chunk_line}", width))
+                lines.append("")
+            if start + 5 < len(paragraph_lines) and (not lines or lines[-1] != ""):
+                lines.append("")
+        if paragraph_index < len(paragraphs) - 1 and (not lines or lines[-1] != ""):
+            lines.append("")
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines or _wrap_picker_text("", width, prefix)
 
 
 def _append_picker_entry(
@@ -279,12 +320,12 @@ def _render_picker(
         if details and cursor < len(details):
             preview_text = details[cursor]
         lines.extend(_wrap_picker_text("Preview:", width, "  "))
-        lines.extend(_wrap_picker_text(preview_text, width, "    "))
+        lines.extend(_wrap_picker_preview_text(preview_text, width, "    "))
     if command_mode:
         lines.extend(_wrap_picker_text("Command:", width, "  "))
         lines.extend(_wrap_picker_text(command_buffer_text or "/", width, "    "))
     if multi:
-        controls = "  Controls: digits toggle  Space/Enter toggle  ↓ to submit  → preview  Ctrl+O details"
+        controls = "  Controls: digits toggle  Space/Enter toggle  ` submit  ↓ to submit  → preview  Ctrl+O details"
     else:
         controls = "  Controls: digits jump  Enter select  → preview  Ctrl+O details"
     if editable_index is not None:
@@ -428,6 +469,21 @@ def prompt_confirmation(
     mode: str = "standard",
 ) -> ConfirmationDecision:
     """Prompt and parse a yes/no-style reply with light intent inference."""
+    if mode == "preview_refine":
+        raw = prompt_text(
+            f"{label} [type refinement, Enter/` accept, q reject]",
+            default="",
+            err=err,
+        )
+        return interpret_confirmation(raw, default=default, mode="preview")
+    if mode == "preview":
+        raw = prompt_text(
+            f"{label} [Enter/` accept, q reject]",
+            default="",
+            err=err,
+        )
+        return interpret_confirmation(raw, default=default, mode="standard")
+
     hint = "Y/n" if default else "y/N"
     default_value = "y" if default else "n"
     raw = prompt_text(f"{label} ({hint})", default=default_value, err=err)
@@ -504,10 +560,17 @@ def _picker_formatted_text(lines: list[str]) -> FormattedText:
     """Convert picker lines into prompt_toolkit fragments."""
     fragments: list[tuple[str, str]] = []
     active_wrap = False
+    preview_body = False
     for index, line in enumerate(lines):
         style = ""
         stripped = line.lstrip()
-        if "Controls:" in line or stripped.startswith("Preview:"):
+        if "Controls:" in line or stripped.startswith("Command:"):
+            style = "bold"
+            preview_body = False
+        elif stripped == "Preview:":
+            style = "bold underline"
+            preview_body = True
+        elif preview_body:
             style = "bold"
         elif stripped.startswith("❯"):
             style = "reverse bold"
@@ -727,6 +790,13 @@ def _prompt_toolkit_pick(
             return
         accept_current(event)
 
+    @bindings.add("`")
+    def _submit_backtick(event) -> None:
+        if _command_active() or _editing_inline() or not multi:
+            return
+        if checked:
+            finish(sorted(checked))
+
     @bindings.add("backspace")
     def _inline_backspace(event) -> None:
         if _command_active():
@@ -941,8 +1011,10 @@ def _simple_tty_pick(
                 _backspace_command()
             elif _editing_inline():
                 _set_editable_text(_editable_text()[:-1])
-        elif key in ("enter", "space"):
+        elif key in ("enter", "space", "backtick"):
             if _command_active():
+                if key == "backtick":
+                    continue
                 if key == "space":
                     _append_command(" ")
                 else:
@@ -966,7 +1038,9 @@ def _simple_tty_pick(
                 _draw(lines, prev_count)
                 prev_count = _screen_line_count(lines)
                 continue
-            if key == "space" and _editing_inline():
+            if key in {"space", "backtick"} and _editing_inline():
+                if key == "backtick":
+                    continue
                 _set_editable_text(_editable_text() + " ")
                 lines = _render_picker(
                     labels,
@@ -987,7 +1061,13 @@ def _simple_tty_pick(
                 _draw(lines, prev_count)
                 prev_count = _screen_line_count(lines)
                 continue
+            if key == "backtick" and not multi:
+                continue
             if multi:
+                if key == "backtick":
+                    if checked:
+                        return sorted(checked)
+                    continue
                 if cursor == len(labels):
                     if checked:
                         return sorted(checked)

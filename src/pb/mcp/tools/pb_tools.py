@@ -21,46 +21,161 @@ class PbToolError(Exception):
     """Raised when ProductiveBrain CLI escape-hatch operations fail."""
 
 
-ALLOWED_SUBCOMMANDS: dict[str, set[str] | None] = {
-    "goal": {"list", "add", "refine"},
-    "anki": {"generate", "list", "export"},
-    "plan": {"day"},
-    "model": {"status", "list", "use"},
-    "notes": {"inbox", "organise"},
-    "review": {"day", "week"},
-    "feedback": None,
-    "pause": None,
-    "resume": None,
-    "finish": None,
-    "do": None,
-    "next": None,
-    "study": None,
-    "practise": None,
-    "practice": None,
-    "learn": None,
-    "teach": None,
-    "doctor": None,
-    "init": None,
-    "thought": None,
-    "todo": None,
-    "mcp": {"status", "doctor", "print-config", "pending", "confirm", "reject"},
+_GLOBAL_VALUE_OPTIONS = {"--config", "--vault"}
+_GLOBAL_FLAG_OPTIONS = {"--yes", "--verbose", "-v", "--dryrun"}
+_HELP_OPTIONS = {"--help", "-h"}
+_PROGRAM_NAMES = {"pb", "brain"}
+
+# Free-form prefixes accept command-specific arguments after the prefix.
+ALLOWED_COMMAND_PREFIXES: set[tuple[str, ...]] = {
+    ("anki", "accept"),
+    ("anki", "export"),
+    ("anki", "generate"),
+    ("anki", "list"),
+    ("anki", "pending"),
+    ("anki", "reject"),
+    ("anki", "review"),
+    ("config", "agents"),
+    ("config", "session", "auto-yes"),
+    ("config", "session", "status"),
+    ("config", "set"),
+    ("config", "show"),
+    ("context", "add"),
+    ("context", "ask"),
+    ("context", "bundle", "add"),
+    ("context", "bundle", "create"),
+    ("context", "bundle", "list"),
+    ("context", "bundle", "remove"),
+    ("context", "bundle", "show"),
+    ("context", "doctor"),
+    ("context", "infer"),
+    ("context", "inspect"),
+    ("context", "list"),
+    ("context", "lock"),
+    ("context", "remove"),
+    ("context", "show"),
+    ("context", "status"),
+    ("context", "unlock"),
+    ("do",),
+    ("doctor",),
+    ("feedback",),
+    ("finish",),
+    ("goal", "add"),
+    ("goal", "delete"),
+    ("goal", "list"),
+    ("goal", "refine"),
+    ("init",),
+    ("init", "llm"),
+    ("learn",),
+    ("mcp", "confirm"),
+    ("mcp", "doctor"),
+    ("mcp", "pending"),
+    ("mcp", "print-config"),
+    ("mcp", "reject"),
+    ("mcp", "status"),
+    ("model", "list"),
+    ("model", "status"),
+    ("model", "use"),
+    ("next",),
+    ("notes", "inbox"),
+    ("notes", "organise"),
+    ("pause",),
+    ("plan", "block", "add"),
+    ("plan", "block", "edit"),
+    ("plan", "block", "list"),
+    ("plan", "block", "rm"),
+    ("plan", "day"),
+    ("plan", "week"),
+    ("practice",),
+    ("practise",),
+    ("reset",),
+    ("resume",),
+    ("review", "day"),
+    ("review", "week"),
+    ("set", "language"),
+    ("set", "model"),
+    ("set", "status"),
+    ("study",),
+    ("teach",),
+    ("thought",),
+    ("todo",),
+    ("update",),
+    ("vault", "add"),
+    ("vault", "current"),
+    ("vault", "doctor"),
+    ("vault", "graph"),
+    ("vault", "list"),
+    ("vault", "neighbors"),
+    ("vault", "orphans"),
+    ("vault", "remove"),
+    ("vault", "rename"),
+    ("vault", "scaffold"),
+    ("vault", "use"),
+}
+
+# Exact entries are command groups or callbacks that should be callable without
+# accidentally opening every hidden subcommand beneath that group.
+ALLOWED_EXACT_COMMANDS: set[tuple[str, ...]] = {
+    ("anki",),
+    ("config",),
+    ("config", "session"),
+    ("context",),
+    ("context", "bundle"),
+    ("goal",),
+    ("mcp",),
+    ("model",),
+    ("notes",),
+    ("plan",),
+    ("plan", "block"),
+    ("review",),
+    ("set",),
+    ("vault",),
 }
 
 READ_ONLY_PREFIXES = {
-    ("anki", "list"),
+    ("anki", "pending"),
+    ("context", "ask"),
+    ("context", "bundle", "list"),
+    ("context", "bundle", "show"),
+    ("context", "doctor"),
+    ("context", "infer"),
+    ("context", "inspect"),
+    ("context", "list"),
+    ("context", "show"),
+    ("context", "status"),
     ("doctor",),
     ("goal", "list"),
-    ("mcp", "status"),
     ("mcp", "doctor"),
-    ("mcp", "print-config"),
     ("mcp", "pending"),
-    ("model", "status"),
+    ("mcp", "print-config"),
+    ("mcp", "status"),
     ("model", "list"),
-    ("next",),
-    ("plan", "day"),
+    ("model", "status"),
+    ("notes", "inbox"),
     ("review", "day"),
     ("review", "week"),
-    ("notes", "inbox"),
+    ("set", "status"),
+    ("vault", "current"),
+    ("vault", "doctor"),
+    ("vault", "graph"),
+    ("vault", "list"),
+    ("vault", "neighbors"),
+    ("vault", "orphans"),
+}
+
+READ_ONLY_EXACT_COMMANDS = {
+    ("anki",),
+    ("config",),
+    ("config", "session"),
+    ("context",),
+    ("context", "bundle"),
+    ("mcp",),
+    ("notes",),
+    ("plan",),
+    ("plan", "block"),
+    ("review",),
+    ("set",),
+    ("vault",),
 }
 
 QUERY_COMMANDS = {
@@ -80,6 +195,17 @@ def _cli_command_prefix() -> list[str]:
     return [sys.executable, "-m", "pb.cli.main"]
 
 
+def _mcp_cli_global_options() -> list[str]:
+    """Propagate the MCP server's selected vault/config into CLI subprocesses."""
+    ctx = get_mcp_context()
+    options: list[str] = []
+    if ctx.config_path is not None:
+        options.extend(["--config", str(ctx.config_path)])
+    if ctx.vault:
+        options.extend(["--vault", ctx.vault])
+    return options
+
+
 def _split_command(command: str) -> list[str]:
     parts = shlex.split(command)
     if not parts:
@@ -87,33 +213,98 @@ def _split_command(command: str) -> list[str]:
     return parts
 
 
+def _strip_program_name(parts: list[str]) -> list[str]:
+    if parts and parts[0] in _PROGRAM_NAMES:
+        return parts[1:]
+    return parts
+
+
+def _command_tokens(parts: list[str]) -> tuple[str, ...]:
+    """Return command-path tokens after root CLI options and optional `pb`."""
+    parts = _strip_program_name(list(parts))
+    index = 0
+    while index < len(parts):
+        token = parts[index]
+        if token in _GLOBAL_FLAG_OPTIONS:
+            index += 1
+            continue
+        if token in _GLOBAL_VALUE_OPTIONS:
+            index += 2
+            continue
+        if any(token.startswith(f"{option}=") for option in _GLOBAL_VALUE_OPTIONS):
+            index += 1
+            continue
+        break
+    return tuple(parts[index:])
+
+
+def _matches_prefix(tokens: tuple[str, ...], prefix: tuple[str, ...]) -> bool:
+    return len(tokens) >= len(prefix) and tokens[: len(prefix)] == prefix
+
+
+def _without_trailing_help(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    if tokens and tokens[-1] in _HELP_OPTIONS:
+        return tokens[:-1]
+    return tokens
+
+
+def _contains_option(tokens: tuple[str, ...], options: set[str]) -> bool:
+    for token in tokens:
+        if token in options:
+            return True
+        if any(token.startswith(f"{option}=") for option in options if option.startswith("--")):
+            return True
+    return False
+
+
+def _allowed_command_labels() -> list[str]:
+    return sorted(
+        " ".join(path)
+        for path in (ALLOWED_COMMAND_PREFIXES | ALLOWED_EXACT_COMMANDS)
+    )
+
+
 def _is_command_allowed(command: str) -> bool:
     try:
-        parts = _split_command(command)
+        tokens = _command_tokens(_split_command(command))
     except ValueError:
         return False
-    if parts[0] not in ALLOWED_SUBCOMMANDS:
+    if not tokens:
         return False
-    allowed_subs = ALLOWED_SUBCOMMANDS[parts[0]]
-    if allowed_subs is None:
+    if tokens[0] in _HELP_OPTIONS:
         return True
-    if len(parts) < 2:
-        return False
-    return parts[1] in allowed_subs
+    comparable = _without_trailing_help(tokens)
+    if comparable in ALLOWED_EXACT_COMMANDS:
+        return True
+    return any(_matches_prefix(comparable, prefix) for prefix in ALLOWED_COMMAND_PREFIXES)
 
 
 def _is_read_only_command(command: str) -> bool:
     try:
-        parts = tuple(_split_command(command))
+        raw_parts = tuple(_strip_program_name(_split_command(command)))
+        tokens = _command_tokens(list(raw_parts))
     except ValueError:
         return False
-    return any(parts[: len(prefix)] == prefix for prefix in READ_ONLY_PREFIXES)
+    if not tokens:
+        return False
+    if tokens[0] in _HELP_OPTIONS or tokens[-1] in _HELP_OPTIONS:
+        return True
+    if tokens in READ_ONLY_EXACT_COMMANDS:
+        return True
+    if _matches_prefix(tokens, ("next",)):
+        return not _contains_option(tokens, {"--run", "--schedule", "-s", "--reminder"})
+    if _matches_prefix(tokens, ("anki", "list")):
+        return not _contains_option(tokens, {"--suggested"})
+    if _matches_prefix(tokens, ("notes", "organise")):
+        return "--yes" not in raw_parts
+    return any(_matches_prefix(tokens, prefix) for prefix in READ_ONLY_PREFIXES)
 
 
 def _run_pb_command(command: str) -> dict:
     try:
+        command_parts = _strip_program_name(_split_command(command))
         result = subprocess.run(
-            _cli_command_prefix() + _split_command(command),
+            _cli_command_prefix() + _mcp_cli_global_options() + command_parts,
             capture_output=True,
             text=True,
             timeout=30,
@@ -173,7 +364,7 @@ def pb_command(command: str) -> dict:
     if not _is_command_allowed(command):
         return {
             "error": f"Command not allowed: {command}",
-            "allowed_commands": sorted(ALLOWED_SUBCOMMANDS.keys()),
+            "allowed_commands": _allowed_command_labels(),
         }
     if not get_mcp_context().allow_writes and not _is_read_only_command(command):
         return {

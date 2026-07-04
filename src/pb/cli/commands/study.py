@@ -52,6 +52,7 @@ from pb.core.learning_tasks import infer_learning_duration_minutes
 from pb.core.enums import BloomStage, EnergyType, TaskState
 from pb.core.feedback_profile import feedback_prompt_suffix
 from pb.core.learning_block_flow import collect_revision_feedback, learner_profile_suffix
+from pb.core.refinement_memory import record_refinement_memory, refinement_memory_prompt_suffix
 from pb.core.clarifier import (
     ClarifierService,
     ask_clarifier_questions,
@@ -102,7 +103,8 @@ def _scope_bullets_with_freshness(scope: str, vault_path: str | None) -> list[st
     for item in items:
         item_lower = item.lower()
         in_vault = any(item_lower in title or title in item_lower for title in known_titles)
-        lines.append(f"- {item}" if in_vault else f"- **{item}**")
+        rendered = renderable_cli_text(item)
+        lines.append(f"- {rendered}" if in_vault else f"- **{rendered}**")
     return lines
 
 
@@ -112,8 +114,8 @@ def _success_lines(success: str) -> list[str]:
         return []
     parts = [s.strip().rstrip(".") for s in re.split(r"(?<=[.!?])\s+|;\s*", success) if s.strip()]
     if len(parts) <= 1:
-        return [success]
-    return [f"{i + 1}. {part}" for i, part in enumerate(parts)]
+        return [renderable_cli_text(success)]
+    return [f"{i + 1}. {renderable_cli_text(part)}" for i, part in enumerate(parts)]
 
 
 app = typer.Typer(
@@ -358,8 +360,35 @@ def _collect_broad_categories(repo) -> dict[str, list[str]]:
     return {cat: sorted(specs) for cat, specs in categories.items() if cat.strip()}
 
 
-def _pick_study_target(repo) -> Optional[str]:
+def _pick_study_target(repo, *, vault_path: Path | None = None) -> Optional[str]:
     from pb.cli.pickers import pick_single_choice
+    from pb.core.concept_navigator import ConceptNavigator
+    from pb.core.context_scope import ContextScopeFilter
+    from pb.core.interest_hierarchy import InterestHierarchyService
+
+    context_filter = ContextScopeFilter.from_repo(repo)
+    directions = InterestHierarchyService(repo, vault_path=vault_path).build(
+        limit=6,
+        context_filter=context_filter,
+    )
+    if directions.nodes:
+        selected_ref = pick_single_choice(
+            [(node.ref, node.label if node.level == "leaf" else f"{node.label} ->") for node in directions.nodes],
+            title="Select study focus",
+            details=[node.reason for node in directions.nodes],
+        )
+        selected_node = next((node for node in directions.nodes if node.ref == selected_ref), None)
+        if selected_node is not None:
+            navigator = ConceptNavigator(repo=repo, vault_path=vault_path, context_filter=context_filter)
+            concept_candidates = navigator.candidates(selected_node.label, parent=selected_node.label, limit=8)
+            if concept_candidates:
+                concept_choice = pick_single_choice(
+                    [(candidate.title, candidate.title) for candidate in concept_candidates],
+                    title=f"{selected_node.label} — pick concept",
+                    details=[candidate.reason for candidate in concept_candidates],
+                )
+                return concept_choice or selected_node.label
+            return selected_node.label
 
     broad = _collect_broad_categories(repo)
     if not broad:
@@ -441,6 +470,7 @@ def _start_planned_study_block(ctx: typer.Context, index: Optional[str]) -> None
     from pb.cli.commands.execute import start_task_internal
 
     repo = ctx.obj["repo"]
+    runtime_ctx = ctx.obj.get("runtime")
     console = get_console()
     rows = _planned_study_rows(repo)
     if not rows:
@@ -710,13 +740,15 @@ def _build_study_prompt(
             "Each step must include `title`, `instruction`, and `success_check`.\n"
             "Use the steps to sequence concepts, formulae, and checks in the most effective study order.\n"
             "If any step instruction or check contains LaTeX that should be treated as math, "
-            "return it as an object with `text` and `is_latex: true`.\n"
+            "return it as an object with `text` and `is_latex: true`; wrap inline math as `$...$`, "
+            "display math as `$$...$$`, and keep leading backslashes on commands such as `\\mathbb`.\n"
         )
     else:
         prompt += "Leave `steps` as an empty list unless stepwise guidance is explicitly requested.\n"
     prompt += clarifier_prompt_block(clarifier_bundle)
     prompt += artifact_presentation_prompt()
     prompt += feedback_prompt_suffix(vault_path, "study")
+    prompt += refinement_memory_prompt_suffix(surface="study", topic=topic_text)
     return prompt
 
 
@@ -746,7 +778,12 @@ def _run_pre_gen_diagnostic(
         probe_prompt = (
             f"Generate exactly 3 multiple-choice diagnostic questions about '{topic}' "
             f"in the domain '{domain}'. Each question should test conceptual understanding "
-            f"at default difficulty. Format as JSON: "
+            f"at default difficulty. All mathematical, statistical, logical, symbolic, "
+            f"or formula-like text in questions, options, and correct answers must use "
+            f"explicit LaTeX delimiters: inline math as $...$, display math as $$...$$. "
+            f"Every LaTeX command must keep its leading backslash, e.g. $\\mathbb{{R}}^n$. "
+            f"Do not emit pseudo-math such as S'_i, f_i(...), Pa(S'_i), or plain ASCII equations. "
+            f"Format as JSON: "
             '{{"questions": [{{"question": "...", "options": ["A...", "B...", "C...", "D..."], "correct": "A..."}}]}}'
         )
         # Use generate_draft with a raw probe — get text back and parse JSON ourselves.
@@ -781,10 +818,10 @@ def _run_pre_gen_diagnostic(
         correct_answer = q.get("correct", "")
         if not question_text or not options:
             continue
-        console.print(f"\n[bold]{question_text}[/bold]")
+        console.print(f"\n[bold]{escape(renderable_cli_text(question_text))}[/bold]")
         try:
             chosen = pick_single_choice(
-                [(opt, opt) for opt in options],
+                [(opt, renderable_cli_text(opt)) for opt in options],
                 title="Choose one",
                 text="Use arrows or digit keys.",
             )
@@ -794,7 +831,7 @@ def _run_pre_gen_diagnostic(
             correct_count += 1
             console.print("[green]Correct[/green]")
         else:
-            console.print(f"[dim]Answer: {correct_answer}[/dim]")
+            console.print(f"[dim]Answer: {escape(renderable_cli_text(correct_answer))}[/dim]")
 
     if correct_count >= 3:
         return "harder"
@@ -817,11 +854,12 @@ def launch_study_session(
     from pb.cli.commands.execute import start_task_internal
 
     repo = ctx.obj["repo"]
+    runtime_ctx = ctx.obj.get("runtime")
     console = get_console()
     auto_yes = bool(yes or ((ctx.obj or {}).get("yes")))
     topic_text = (topic or "").strip()
     if not topic_text:
-        topic_text = _pick_study_target(repo) or ""
+        topic_text = _pick_study_target(repo, vault_path=getattr(runtime_ctx, "vault_path", None)) or ""
     if not topic_text:
         raise typer.BadParameter("A study topic is required.")
     if not resolve_active_session_preflight(
@@ -1033,6 +1071,13 @@ def launch_study_session(
             continue
 
         revision_note = revision_feedback.free_text
+        if revision_note.strip():
+            record_refinement_memory(
+                repo,
+                surface="study",
+                topic=block.subject_scope or topic_text,
+                refinement=revision_note,
+            )
 
         topic_text = block.subject_scope or topic_text
         requested_minutes = block.duration_minutes
@@ -1650,8 +1695,9 @@ def study_recall(
     prompt = (
         "Create scoped active-recall prompts for the study loop.\n"
         f"Scope: {scope}\n"
-        "If a prompt or answer contains mathematical TeX/LaTeX that should be treated as math, "
-        "return it as {text: ..., is_latex: true}. Plain strings are always plain text.\n"
+        "All mathematical, statistical, logical, symbolic, or formula-like text must use explicit LaTeX delimiters. "
+        "Use inline math as `$...$`, display math as `$$...$$`, and keep leading backslashes on commands such as `\\mathbb`. "
+        "Return any math-bearing prompt or answer as {text: ..., is_latex: true}; plain strings are only for genuinely non-mathematical text.\n"
         "Use only the provided notes.\n\n"
         f"{chr(10).join(note_context)}"
     )

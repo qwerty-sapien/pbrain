@@ -24,7 +24,7 @@ from pb.core.learning_prompting import language_instruction, learning_intent_sty
 from pb.core.product_control import ControlState
 from pb.core.prerequisites import build_prerequisite_chain
 from pb.core.scope_resolution import matching_goals
-from pb.core.staging import build_learning_context
+from pb.core.staging import _active_context_digest, build_learning_context
 from pb.llm.drafts import ClarifierQuestionDraft, ClarifierQuestionSetDraft
 from pb.llm.runtime import DraftGenerationError, LLMRuntime
 from pb.storage.config import get_config
@@ -236,19 +236,30 @@ def build_clarifier_context(
     learner_level: str = "",
     control_state: ControlState | None = None,
 ) -> dict[str, Any]:
-    """Build the compact context packet used by the clarifier."""
+    """Build the compact context packet used by the clarifier.
+
+    When a context is locked, ambient topic material (matching goals, recent
+    sessions, and vault snippets from unrelated notes) is withheld so the locked
+    source alone frames the clarifier — hard-scoping the request.
+    """
     vault_path = getattr(runtime_ctx, "vault_path", Path("."))
+    try:
+        locked_context = repo.get_locked_context() if repo is not None else None
+    except Exception:
+        locked_context = None
+    hard_scoped = locked_context is not None
     return {
         "raw_request": raw_request,
         "scope": scope,
         "mode": mode,
         "domain": domain,
         "learner_level": learner_level,
+        "active_context": _active_context_digest(locked_context) if hard_scoped else None,
         "local_context": build_learning_context(repo, runtime_ctx),
-        "matching_goals": matching_goals(repo, raw_request),
-        "recent_sessions": _recent_sessions(repo),
+        "matching_goals": [] if hard_scoped else matching_goals(repo, raw_request),
+        "recent_sessions": [] if hard_scoped else _recent_sessions(repo),
         "feedback_guidance": load_feedback_guidance(vault_path, scope),
-        "vault_snippets": _vault_snippets(vault_path, raw_request),
+        "vault_snippets": [] if hard_scoped else _vault_snippets(vault_path, raw_request),
         "learner_profile": build_global_learner_profile(repo, runtime_ctx),
         "recent_clarifier_answers": _recent_clarifier_answers(repo),
         "prior_control_state": control_state.model_dump(mode="json") if control_state is not None else {},

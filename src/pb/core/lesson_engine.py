@@ -203,6 +203,10 @@ def _limit_lesson_question_choices(question_draft: LessonQuestionDraft) -> Lesso
         return question_draft
 
     choices = _dedupe_preserving_order(list(question_draft.choices))
+    question_draft.correct_choices = _choice_refs_to_values(list(question_draft.correct_choices), choices)
+    question_draft.accepted_answers = _choice_refs_to_values(list(question_draft.accepted_answers), choices)
+    if str(question_draft.reveal_answer or "").strip():
+        question_draft.reveal_answer = _choice_ref_text_to_value(question_draft.reveal_answer, choices)
     priority = _dedupe_preserving_order(
         list(question_draft.correct_choices)
         + ([question_draft.reveal_answer] if str(question_draft.reveal_answer or "").strip() else [])
@@ -225,6 +229,113 @@ def _limit_lesson_question_choices(question_draft: LessonQuestionDraft) -> Lesso
     if question_draft.question_type in {"mcq", "cloze"} and question_draft.correct_choices:
         question_draft.reveal_answer = question_draft.correct_choices[0]
     _coerce_multi_select_shape(question_draft)
+    return question_draft
+
+
+def _randomized_choice_values(
+    choices: list[str],
+    correct_choices: list[str],
+    *,
+    rng: random.Random | random.SystemRandom | None = None,
+) -> list[str]:
+    """Shuffle recognition choices while avoiding a first-slot answer cue."""
+
+    randomized = _dedupe_preserving_order(choices)
+    if len(randomized) <= 1:
+        return randomized
+    shuffler = rng or random.SystemRandom()
+    shuffler.shuffle(randomized)
+    correct_norm = {_normalize_text(item) for item in correct_choices if str(item).strip()}
+    if correct_norm and _normalize_text(randomized[0]) in correct_norm:
+        distractor_indexes = [
+            index
+            for index, item in enumerate(randomized[1:], start=1)
+            if _normalize_text(item) not in correct_norm
+        ]
+        if distractor_indexes:
+            swap_index = shuffler.choice(distractor_indexes)
+            randomized[0], randomized[swap_index] = randomized[swap_index], randomized[0]
+    return randomized
+
+
+def _choice_ref_to_value(raw: object, choices: list[str]) -> str:
+    """Resolve ordinal answer-key references against the current choice text."""
+
+    clean = str(raw or "").strip()
+    if not clean:
+        return ""
+    normalized_choice_map = {_normalize_text(choice): choice for choice in choices}
+    direct = normalized_choice_map.get(_normalize_text(clean))
+    if direct:
+        return direct
+    without_number = re.sub(r"^\s*\d+[\).\s-]+", "", clean).strip()
+    direct = normalized_choice_map.get(_normalize_text(without_number))
+    if direct:
+        return direct
+    ordinal = re.fullmatch(r"(?:option|choice|answer)?\s*#?\s*(\d+)", clean, flags=re.IGNORECASE)
+    if ordinal:
+        index = int(ordinal.group(1)) - 1
+        if 0 <= index < len(choices):
+            return choices[index]
+    return clean
+
+
+def _choice_refs_to_values(values: list[object], choices: list[str]) -> list[str]:
+    """Normalize generated answer keys before display-order randomization."""
+
+    if not choices:
+        return _dedupe_preserving_order([str(item).strip() for item in values if str(item).strip()])
+    resolved: list[str] = []
+    for value in values:
+        raw = str(value or "").strip()
+        if not raw:
+            continue
+        parts = _split_answers(raw)
+        if len(parts) == 1 and parts[0] == raw:
+            ordinal_list = re.fullmatch(
+                r"\s*(?:options?|choices?|answers?)?\s*#?\s*\d+"
+                r"(?:\s*(?:,|;|\||and)\s*(?:options?|choices?|answers?)?\s*#?\s*\d+)*\s*",
+                raw,
+                flags=re.IGNORECASE,
+            )
+            digit_refs = re.findall(r"\d+", raw) if ordinal_list else []
+            if digit_refs:
+                parts = digit_refs
+        for part in parts:
+            mapped = _choice_ref_to_value(part, choices)
+            if mapped:
+                resolved.append(mapped)
+    return _dedupe_preserving_order(resolved)
+
+
+def _choice_ref_text_to_value(raw: object, choices: list[str]) -> str:
+    resolved = _choice_refs_to_values([raw], choices)
+    if len(resolved) > 1:
+        return " | ".join(resolved)
+    if resolved:
+        return resolved[0]
+    return str(raw or "").strip()
+
+
+def _randomize_lesson_question_choices(
+    question_draft: LessonQuestionDraft,
+    *,
+    rng: random.Random | random.SystemRandom | None = None,
+) -> LessonQuestionDraft:
+    """Mechanically randomize generated MCQ, multiselect, and cloze choices."""
+
+    if question_draft.question_type not in {"mcq", "multi_select", "cloze"}:
+        return question_draft
+    choices = _dedupe_preserving_order(list(question_draft.choices))
+    question_draft.correct_choices = _choice_refs_to_values(list(question_draft.correct_choices), choices)
+    question_draft.accepted_answers = _choice_refs_to_values(list(question_draft.accepted_answers), choices)
+    if str(question_draft.reveal_answer or "").strip():
+        question_draft.reveal_answer = _choice_ref_text_to_value(question_draft.reveal_answer, choices)
+    question_draft.choices = _randomized_choice_values(
+        choices,
+        list(question_draft.correct_choices) or list(question_draft.accepted_answers),
+        rng=rng,
+    )
     return question_draft
 
 
@@ -909,39 +1020,35 @@ class LessonEngine:
             + f"Task metadata steps: {meta.steps or []}\n"
             + feynman_persona
         )
-        result = self.runtime.generate_draft(
-            LessonPlanDraft,
-            prompt,
-            source_scope=f"lesson_plan:{self.session.id}",
-            model=_resolve_learning_model_binding(self.runtime, "lesson_planning"),
-            max_output_tokens=15000,
-        )
+        try:
+            result = self.runtime.generate_draft(
+                LessonPlanDraft,
+                prompt,
+                source_scope=f"lesson_plan:{self.session.id}",
+                model=_resolve_learning_model_binding(self.runtime, "lesson_planning"),
+                max_output_tokens=15000,
+            )
+        except DraftGenerationError:
+            return self._fallback_lesson_plan()
         draft = result.payload
         if not draft.pages:
-            from pb.llm.runtime import DraftAttempt, ProviderErrorDetails
-            raise DraftGenerationError(
-                source_scope=f"lesson_plan:{self.session.id}",
-                prompt_template_version=self.runtime.config.llm.prompt_template_version,
-                attempts=list(result.attempts),
-                error=ProviderErrorDetails(
-                    category="empty",
-                    provider=result.model.split(":")[0] if ":" in result.model else result.model,
-                    model=result.model.split(":", 1)[1] if ":" in result.model else result.model,
-                    raw_message="LLM returned a lesson plan with no pages.",
-                    http_status=200,
-                    retryable=False,
-                ),
-            )
+            return self._fallback_lesson_plan()
         for page in draft.pages:
             for question in page.questions:
                 _limit_lesson_question_choices(question)
-        _validate_lesson_draft(
-            draft,
-            source_scope=f"lesson_plan:{self.session.id}",
-            topic=self.topic,
-            has_context=bool(self._active_context_identifiers()),
-            runtime=self.runtime,
-        )
+        try:
+            _validate_lesson_draft(
+                draft,
+                source_scope=f"lesson_plan:{self.session.id}",
+                topic=self.topic,
+                has_context=bool(self._active_context_identifiers()),
+                runtime=self.runtime,
+            )
+        except DraftGenerationError:
+            return self._fallback_lesson_plan()
+        for page in draft.pages:
+            for question in page.questions:
+                _randomize_lesson_question_choices(question)
         return draft
 
     def _fallback_lesson_plan(self) -> LessonPlanDraft:
@@ -1085,6 +1192,7 @@ class LessonEngine:
         for page in pages:
             for question in page.questions:
                 _limit_lesson_question_choices(question)
+                _randomize_lesson_question_choices(question)
         return LessonPlanDraft(
             lesson_title=f"{topic} lesson",
             summary=f"Deterministic lesson plan for {topic}.",
@@ -1107,7 +1215,7 @@ class LessonEngine:
         header_note = ""
         if run.ready_to_finish:
             header_note = "Lesson cleared. Use /finish when you want to close the session."
-        footer_commands = ["/hint", "/answer", "/harder", "/easier", "/intuitive"]
+        footer_commands = ["/hint", "/answer", "/harder", "/easier", "/intuitive", "/spawn", "/forget"]
         if question is not None and question.revealed:
             footer_commands.append("/skip")
         return LessonSnapshot(
@@ -1979,6 +2087,7 @@ class LessonEngine:
                     max_output_tokens=4000,
                 ).payload
                 _limit_lesson_question_choices(generated)
+                _randomize_lesson_question_choices(generated)
                 return LessonQuestionRecord(
                     id=question.id,
                     lesson_run_id=question.lesson_run_id,
@@ -2042,18 +2151,30 @@ class LessonEngine:
                     transformed_choices.append(f"drill: {choice}")
             if transformed_choices and transformed_choices != base_choices:
                 prompt_json["choices"] = transformed_choices
+                original_correct = list(
+                    answer_json.get("correct_choices", []) or answer_json.get("accepted_answers", []) or []
+                )
+                mapped_correct = [
+                    transformed_choices[base_choices.index(item)] if item in base_choices else item
+                    for item in original_correct
+                ]
                 if question.question_type == "cloze":
-                    answer_json["accepted_answers"] = [transformed_choices[0]]
-                    answer_json["correct_choices"] = [transformed_choices[0]]
-                    answer_json["reveal_answer"] = transformed_choices[0]
+                    target = mapped_correct[0] if mapped_correct else transformed_choices[0]
+                    answer_json["accepted_answers"] = [target]
+                    answer_json["correct_choices"] = [target]
+                    answer_json["reveal_answer"] = target
                 elif question.question_type == "mcq":
-                    answer_json["correct_choices"] = [transformed_choices[0]]
-                    answer_json["accepted_answers"] = [transformed_choices[0]]
+                    target = mapped_correct[0] if mapped_correct else transformed_choices[0]
+                    answer_json["correct_choices"] = [target]
+                    answer_json["accepted_answers"] = [target]
                 elif question.question_type == "multi_select":
-                    correct_choices = list(answer_json.get("correct_choices", []) or [])
-                    if correct_choices:
-                        answer_json["correct_choices"] = [transformed_choices[base_choices.index(item)] if item in base_choices else item for item in correct_choices]
+                    if mapped_correct:
+                        answer_json["correct_choices"] = mapped_correct
                         answer_json["accepted_answers"] = list(answer_json["correct_choices"])
+                prompt_json["choices"] = _randomized_choice_values(
+                    list(prompt_json.get("choices", []) or []),
+                    list(answer_json.get("correct_choices", []) or answer_json.get("accepted_answers", []) or []),
+                )
 
         if question.question_type == "reorder":
             ordered_items = list(answer_json.get("ordered_items", []) or [])

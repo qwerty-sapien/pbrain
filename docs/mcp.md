@@ -30,7 +30,10 @@ Agents should use semantic ProductiveBrain tools rather than shelling out throug
 - context packet build
 - Anki candidate generation
 
-`pb_command` remains available as a debug escape hatch.
+`pb_command` remains available as a debug escape hatch. It should cover the
+visible human CLI command surface and execute against the same `--vault` and
+`--config` selected for the MCP server. Read-only MCP mode still blocks
+commands that can mutate vault or SQLite state.
 
 ## Current Boundaries
 

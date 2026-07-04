@@ -17,7 +17,9 @@ from pb.cli.pickers import pick_single_choice
 from pb.llm.gemini import FLASH_LITE_MODEL, FLASH_MODEL, PRO_MODEL
 from pb.llm.runtime import LLMRuntime
 from pb.storage.config import (
+    ANTHROPIC_FAST_MODEL,
     get_config,
+    OPENAI_FAST_MODEL,
     set_default_model_binding,
     set_model_role,
     upsert_provider,
@@ -29,8 +31,23 @@ app = typer.Typer(no_args_is_help=False, invoke_without_command=True)
 _KNOWN_PROVIDER_MODELS = {
     "gemini": [FLASH_LITE_MODEL, FLASH_MODEL, PRO_MODEL],
     "vertex": [FLASH_LITE_MODEL, FLASH_MODEL, PRO_MODEL],
-    "openai": ["gpt-5", "gpt-5-mini", "gpt-5-nano", "o3", "o4-mini"],
-    "anthropic": ["claude-sonnet-4-0", "claude-opus-4-0", "claude-3-7-sonnet-latest"],
+    "openai": [
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        OPENAI_FAST_MODEL,
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "o3",
+        "o4-mini",
+    ],
+    "anthropic": [
+        ANTHROPIC_FAST_MODEL,
+        "claude-sonnet-4-5",
+        "claude-sonnet-4-0",
+        "claude-opus-4-0",
+        "claude-3-7-sonnet-latest",
+    ],
 }
 
 

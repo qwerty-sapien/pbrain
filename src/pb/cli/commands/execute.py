@@ -175,7 +175,7 @@ def _maybe_create_roadmap_follow_ons(ctx: typer.Context, repo, task, assessment)
     )
 
     while True:
-        decision = preview_decision(yes=False, action_label="Create these next task(s)")
+        decision = preview_decision(yes=False, action_label="Create these next task(s)", allow_refinement=True)
         if decision.kind == "accept":
             return materialize_next_frontier_tasks(
                 repo,

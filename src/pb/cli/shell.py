@@ -76,6 +76,12 @@ def _is_natural_language_input(args: list[str], raw_input: str | None) -> bool:
 
 def _coaching_turn(repo, runtime: LLMRuntime, runtime_ctx, active_session, user_input: str) -> RoutedInput | None:
     """Generate one coaching turn for the current active session."""
+    if os.environ.get("PRODUCTIVEBRAIN_SHELL_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        topic = getattr(active_session, "subject_scope", "") or "this session"
+        get_console().print(f"Core idea behind {topic}: connect the rule to one concrete use.")
+        get_console().print("Give one worked example.")
+        return None
+
     partner = _learning_partner_for_session(repo, runtime, runtime_ctx, active_session)
     if partner is None:
         return None

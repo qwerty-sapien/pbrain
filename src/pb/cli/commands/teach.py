@@ -42,6 +42,7 @@ from pb.core.feedback_profile import feedback_prompt_suffix
 from pb.core.learning_block_flow import collect_revision_feedback, learner_profile_suffix
 from pb.core.learning_partner import LearningPartnerSession
 from pb.core.learning_tasks import infer_learning_duration_minutes, materialize_learning_task
+from pb.core.refinement_memory import record_refinement_memory, refinement_memory_prompt_suffix
 from pb.core.naming import (
     NameService,
     apply_generated_names,
@@ -79,9 +80,14 @@ def launch_teach_session(
     from pb.cli.commands.study import _seed_study_block
 
     repo = ctx.obj["repo"]
+    runtime_ctx = ctx.obj.get("runtime")
     console = get_console()
     auto_yes = bool(yes or ((ctx.obj or {}).get("yes")))
     concept_text = (concept or "").strip()
+    if not concept_text:
+        from pb.cli.commands.study import _pick_study_target
+
+        concept_text = _pick_study_target(repo, vault_path=getattr(runtime_ctx, "vault_path", None)) or ""
     if not concept_text:
         raise typer.BadParameter("A concept is required. Try `pb teach linear algebra`.")
     if not resolve_active_session_preflight(
@@ -147,7 +153,8 @@ def launch_teach_session(
             "Include 4-8 ordered steps in `steps`.\n"
             "Each step must include `title`, `instruction`, and `success_check`.\n"
             "If any step instruction or check contains mathematical TeX/LaTeX, "
-            "return it as an object with `text` and `is_latex: true`.\n"
+            "return it as an object with `text` and `is_latex: true`; wrap inline math as `$...$`, "
+            "display math as `$$...$$`, and keep leading backslashes on commands such as `\\mathbb`.\n"
         )
     else:
         prompt += "Leave `steps` as an empty list unless stepwise guidance is explicitly requested.\n"
@@ -169,6 +176,7 @@ def launch_teach_session(
     }
     prompt += context_prompt_contract(active_context_scope)
     prompt += feedback_prompt_suffix(runtime_ctx.vault_path, "teach")
+    prompt += refinement_memory_prompt_suffix(surface="teach", topic=concept_text)
     prompt += learner_profile_suffix(repo, runtime_ctx)
     recorder = runtime.make_stage_recorder("teach", concept_text, route_hint="teach")
     context = build_learning_context(repo, runtime_ctx)
@@ -315,6 +323,13 @@ def launch_teach_session(
         )
         if revision_feedback is None:
             continue
+        if revision_feedback.free_text.strip():
+            record_refinement_memory(
+                repo,
+                surface="teach",
+                topic=block.subject_scope or concept_text,
+                refinement=revision_feedback.free_text,
+            )
 
         concept_text = block.subject_scope or concept_text
         requested_minutes = block.duration_minutes
@@ -347,13 +362,15 @@ def launch_teach_session(
                 "Include 4-8 ordered steps in `steps`.\n"
                 "Each step must include `title`, `instruction`, and `success_check`.\n"
                 "If any step instruction or check contains mathematical TeX/LaTeX, "
-                "return it as an object with `text` and `is_latex: true`.\n"
+                "return it as an object with `text` and `is_latex: true`; wrap inline math as `$...$`, "
+                "display math as `$$...$$`, and keep leading backslashes on commands such as `\\mathbb`.\n"
             )
         else:
             prompt += "Leave `steps` as an empty list unless stepwise guidance is explicitly requested.\n"
         prompt += artifact_presentation_prompt()
         prompt += _clarifier_answer_block(clarifier_bundle)
         prompt += feedback_prompt_suffix(runtime_ctx.vault_path, "teach")
+        prompt += refinement_memory_prompt_suffix(surface="teach", topic=concept_text)
         prompt += learner_profile_suffix(repo, runtime_ctx)
         prompt += revision_feedback.prompt_suffix
         try:

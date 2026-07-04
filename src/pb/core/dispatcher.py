@@ -150,11 +150,19 @@ def _dispatch_ranking_hook(
     remain untouched unless an explicit agent exclusion removes the top choice.
     """
     excluded = {agent_id for agent_id in (excluded_agent_ids or set()) if agent_id}
+    try:
+        from pb.core.agent_lifecycle import dispatch_agent_disabled
+    except Exception:  # pragma: no cover - defensive import guard
+        dispatch_agent_disabled = None  # type: ignore[assignment]
     ordered_candidates: list[str] = []
     for agent_id in [decision.agent_id, *decision.candidate_agent_ids]:
         normalized = (agent_id or "").strip()
         if not normalized or normalized in ordered_candidates or normalized in excluded:
             continue
+        if normalized.startswith("domain_") and dispatch_agent_disabled is not None:
+            domain = normalized[len("domain_"):]
+            if dispatch_agent_disabled(domain):
+                continue
         ordered_candidates.append(normalized)
 
     if not ordered_candidates:
@@ -348,7 +356,7 @@ def _get_or_create_domain_agent_record(
 ) -> Optional[dict]:
     """Return the dispatch_agent row for a domain agent, or None if not found."""
     row = conn.execute(
-        "SELECT id, domain, goal_id, interaction_count FROM dispatch_agents WHERE domain = ?",
+        "SELECT id, domain, goal_id, interaction_count, config_json FROM dispatch_agents WHERE domain = ?",
         (domain,),
     ).fetchone()
     return dict(row) if row else None
@@ -581,6 +589,7 @@ async def dispatch(
         DispatchDecision,
         system_prompt=_DISPATCH_SYSTEM_PROMPT,
         tier="lite",
+        operation="routing",
     )
 
     if decision is None:

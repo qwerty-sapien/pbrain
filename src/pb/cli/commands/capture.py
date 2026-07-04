@@ -9,7 +9,6 @@ from typing import Optional
 
 import typer
 
-from pb.core.naming import stored_display_title
 from pb.domain.enums import Horizon, TaskState
 from pb.domain.models import Task, generate_slug
 from pb.storage.repository import Repository
@@ -44,7 +43,7 @@ def create_task(text: str, horizon: str = "today", skill: str = "", track: str =
             insert_skill_link(task.id, s, source="pre-tag")
             _skill_mgr.create_skill(s)
 
-    typer.echo(f"Added: {stored_display_title(task) or task.title}")
+    typer.echo(f"Added: {task.title}")
 
 
 @app.callback(invoke_without_command=True)

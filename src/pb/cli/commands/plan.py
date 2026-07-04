@@ -37,6 +37,7 @@ from pb.core.intake import create_task
 from pb.core.learning_tasks import ensure_time_block, materialize_learning_task
 from pb.core.models import Task
 from pb.core.feedback_profile import feedback_prompt_suffix
+from pb.core.refinement_memory import record_refinement_memory, refinement_memory_prompt_suffix
 from pb.core.staging import build_assumptions, build_learning_context, build_reflection
 from pb.llm.drafts import LearningPlanBlockDraft, MixedPlanDraft, artifact_presentation_prompt
 from pb.llm.runtime import DraftGenerationError
@@ -566,6 +567,24 @@ def _build_day_plan_refinement_prompt(
     )
 
 
+def _day_plan_memory_topic(repo: Repository | None = None, draft: MixedPlanDraft | None = None) -> str:
+    parts: list[str] = []
+    if draft is not None:
+        for block in draft.blocks[:5]:
+            value = (block.subject_scope or block.title or "").strip()
+            if value and value not in parts:
+                parts.append(value)
+    if not parts and repo is not None:
+        try:
+            for goal in repo.list_goal_arcs(status=None)[:5]:
+                value = (getattr(goal, "domain", "") or getattr(goal, "title", "") or "").strip()
+                if value and value not in parts:
+                    parts.append(value)
+        except Exception:
+            pass
+    return " | ".join(parts)
+
+
 def _default_block_duration(budget_minutes: int | None, slots: int = 1) -> int:
     baseline = budget_minutes or 90
     return max(20, min(60, int(baseline / max(1, slots))))
@@ -802,6 +821,7 @@ def plan_day(
 
     runtime_ctx = ctx.obj["runtime"]
     prompt += feedback_prompt_suffix(runtime_ctx.vault_path, "plan")
+    prompt += refinement_memory_prompt_suffix(surface="plan", topic=_day_plan_memory_topic(repo=repo))
     recorder = runtime.make_stage_recorder("plan_day", budget or "today", route_hint="plan day")
     context = build_learning_context(repo, runtime_ctx)
     recorder.add("prepare", context)
@@ -878,12 +898,18 @@ def plan_day(
     else:
         accepted = False
         while True:
-            decision = preview_decision(yes=yes, action_label="Materialize today's plan")
+            decision = preview_decision(yes=yes, action_label="Materialize today's plan", allow_refinement=True)
             if decision.kind == "accept":
                 accepted = True
                 break
             if decision.kind == "cancel":
                 break
+            record_refinement_memory(
+                repo,
+                surface="plan",
+                topic=_day_plan_memory_topic(repo=repo, draft=draft),
+                refinement=decision.text,
+            )
             refined = _apply_day_plan_refinement(draft, decision.text, budget_minutes=budget_minutes)
             if refined is not None:
                 draft = refined

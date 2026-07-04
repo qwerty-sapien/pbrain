@@ -15,11 +15,13 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 from pb.cli.commands.anki import _resolve_deck_and_domain
-from pb.cli.context_runtime import attach_active_context, ingest_context_source
+from pb.cli.context_runtime import attach_active_context, ingest_context_source, normalize_context_source_storage
 from pb.cli.commands.notes import _collect_moves, apply_moves, _parse_frontmatter
 from pb.cli.commands.review import _collect_review_metrics
 from pb.core.action_routing import build_next_candidates, route_learning_intent, suggest_commands_for_intent
 from pb.core.clock import utc_now
+from pb.core.context_scope import ContextScopeFilter
+from pb.core.interest_hierarchy import InterestHierarchyService
 from pb.core.context_file_intake import (
     active_context_from_bundle,
     active_context_from_sources,
@@ -108,41 +110,66 @@ def _context_cmd_ctx(runtime, repo):
 
 
 _TOOL_CATALOG: dict[str, str] = {
-    "vault_current": "read_only",
-    "vault_profile": "read_only",
-    "goal_draft_from_text": "read_only",
-    "goal_commit_draft": "tier_2_queued_write",
-    "goal_list": "read_only",
-    "plan_day": "read_only",
-    "next_action": "read_only",
-    "feedback_capture": "tier_1_write",
-    "do_route": "read_only",
-    "context_file_inspect": "read_only",
-    "context_file_ingest": "tier_1_write",
-    "context_file_status": "read_only",
-    "source_bundle_list": "read_only",
-    "source_bundle_show": "read_only",
-    "context_lock": "tier_1_write",
-    "context_unlock": "tier_1_write",
-    "context_status": "read_only",
-    "study_start": "tier_2_queued_write",
-    "practise_start": "tier_2_queued_write",
-    "teach_start": "tier_2_queued_write",
-    "learn_start": "tier_2_queued_write",
-    "learn_with_context": "tier_1_write",
-    "session_status": "read_only",
-    "session_pause": "tier_2_queued_write",
-    "session_resume": "tier_2_queued_write",
-    "session_finish": "tier_2_queued_write",
-    "anki_generate_candidates": "tier_2_queued_write",
     "anki_candidate_list": "read_only",
     "anki_candidate_status_counts": "read_only",
-    "anki_candidate_update": "tier_1_write",
+    "anki_candidate_update": "tier_2_queued_write",
+    "anki_export": "tier_2_queued_write",
     "anki_export_status": "read_only",
-    "anki_export": "tier_1_write",
+    "anki_generate_candidates": "tier_2_queued_write",
     "context_build": "read_only",
-    "vault_link_graph": "read_only",
+    "context_file_ingest": "tier_1_write",
+    "context_file_inspect": "read_only",
+    "context_file_status": "read_only",
+    "context_lock": "tier_1_write",
+    "context_status": "read_only",
+    "context_unlock": "tier_1_write",
+    "do_route": "read_only",
+    "evidence_list": "read_only",
+    "feedback_capture": "tier_1_write",
+    "goal_commit_draft": "tier_2_queued_write",
+    "goal_draft_from_text": "read_only",
+    "goal_list": "read_only",
+    "learn_start": "tier_2_queued_write",
+    "learn_with_context": "tier_1_write",
+    "mcp_pending_list": "read_only",
+    "next_action": "read_only",
+    "notes_inbox": "read_only",
+    "notes_organise_commit": "tier_2_queued_write",
+    "notes_organise_preview": "read_only",
+    "pb_agents": "mixed_read_or_write",
     "pb_command": "debug_escape_hatch",
+    "pb_find": "read_only",
+    "pb_ingest": "tier_1_write",
+    "pb_query": "read_only",
+    "pb_respond": "tier_1_write",
+    "plan_day": "read_only",
+    "practise_start": "tier_2_queued_write",
+    "retry_queue_add": "tier_1_write",
+    "retry_queue_list": "read_only",
+    "retry_queue_reschedule": "tier_1_write",
+    "retry_queue_resolve": "tier_1_write",
+    "review_day": "read_only",
+    "review_week": "read_only",
+    "schema_get": "read_only",
+    "schema_update": "tier_1_write",
+    "session_finish": "tier_2_queued_write",
+    "session_pause": "tier_2_queued_write",
+    "session_resume": "tier_2_queued_write",
+    "session_status": "read_only",
+    "source_bundle_list": "read_only",
+    "source_bundle_show": "read_only",
+    "study_start": "tier_2_queued_write",
+    "teach_start": "tier_2_queued_write",
+    "thought_capture": "tier_1_write",
+    "todo_capture": "tier_1_write",
+    "tool_catalog": "read_only",
+    "vault_current": "read_only",
+    "vault_create": "tier_2_queued_write",
+    "vault_link_graph": "read_only",
+    "vault_profile": "read_only",
+    "vault_read": "read_only",
+    "vault_search": "read_only",
+    "vault_write": "tier_2_queued_write",
 }
 
 
@@ -376,12 +403,19 @@ def plan_day() -> dict[str, Any]:
 
 @mcp.tool()
 def next_action(limit: int = 5) -> dict[str, Any]:
-    """Return ranked next actions without forcing CLI stdout parsing."""
-    _, repo = _bootstrap_repo()
+    """Return ranked next actions and compact next-direction hierarchy."""
+    runtime, repo = _bootstrap_repo()
     candidates = build_next_candidates(repo, limit=limit)
+    context_filter = ContextScopeFilter.from_repo(repo)
+    directions = InterestHierarchyService(repo, vault_path=runtime.vault_path).build(
+        limit=limit,
+        context_filter=context_filter,
+    )
     return {
         "next_action": _safe_dict(candidates[0]) if candidates else None,
         "candidates": [_safe_dict(c) for c in candidates],
+        "directions": [_safe_dict(node) for node in directions.nodes],
+        "excluded_by_context_lock": list(directions.excluded_by_lock),
     }
 
 
@@ -418,6 +452,55 @@ def feedback_capture(
         "surface": normalized,
         "note_path": str(note_path),
         "guidance": load_feedback_guidance(runtime.vault_path, normalized),
+    }
+
+
+@mcp.tool()
+def thought_capture(text: str) -> dict[str, Any]:
+    """Capture a quick thought as a Markdown inbox note."""
+    _require_writes()
+    normalized = " ".join((text or "").split())
+    if not normalized:
+        return {"captured": False, "error": "Thought text is required."}
+
+    from pb.core.graph_writer import make_slug
+    from pb.vault.lifecycle import write_frontmatter
+
+    runtime, _ = _bootstrap_repo()
+    now = utc_now()
+    slug = make_slug(normalized) or "thought"
+    thought_dir = runtime.vault_path / "Learning" / "Inbox" / "pb" / "thoughts"
+    thought_dir.mkdir(parents=True, exist_ok=True)
+    note_path = thought_dir / f"{now.strftime('%Y%m%d-%H%M%S-%f')}-{slug}.md"
+    frontmatter = {
+        "type": "thought",
+        "source": "pb",
+        "status": "captured",
+        "created": now.isoformat(timespec="seconds"),
+    }
+    note_path.write_text(
+        write_frontmatter(frontmatter, f"# Thought\n\n{normalized}\n"),
+        encoding="utf-8",
+    )
+    return {
+        "captured": True,
+        "path": str(note_path.relative_to(runtime.vault_path)),
+        "text": normalized,
+    }
+
+
+@mcp.tool()
+def todo_capture(text: str, due_date: str = "") -> dict[str, Any]:
+    """Capture a todo so it participates in next-action routing."""
+    _require_writes()
+    normalized = " ".join((text or "").split())
+    if not normalized:
+        return {"captured": False, "error": "Todo text is required."}
+    _, repo = _bootstrap_repo()
+    task = create_task(repo, normalized, due_date=_parse_optional_due_date(due_date))
+    return {
+        "captured": True,
+        "task": task.model_dump(mode="json"),
     }
 
 
@@ -492,7 +575,8 @@ def context_file_ingest(paths: list[str], model: str = "") -> dict[str, Any]:
 @mcp.tool()
 def context_file_status(source_id: str = "") -> dict[str, Any]:
     """Return one stored source record or list all stored context sources."""
-    _, repo = _bootstrap_repo()
+    runtime, repo = _bootstrap_repo()
+    normalize_context_source_storage(_context_cmd_ctx(runtime, repo))
     if source_id.strip():
         record = repo.find_context_source(source_id)
         return {"source": _safe_dict(record), "found": record is not None}
@@ -504,7 +588,8 @@ def context_file_status(source_id: str = "") -> dict[str, Any]:
 @mcp.tool()
 def source_bundle_list() -> dict[str, Any]:
     """List stored source bundles."""
-    _, repo = _bootstrap_repo()
+    runtime, repo = _bootstrap_repo()
+    normalize_context_source_storage(_context_cmd_ctx(runtime, repo))
     return {
         "bundles": [bundle.model_dump(mode="json") for bundle in repo.list_source_bundles()],
     }
@@ -513,7 +598,8 @@ def source_bundle_list() -> dict[str, Any]:
 @mcp.tool()
 def source_bundle_show(name: str) -> dict[str, Any]:
     """Show one stored source bundle by name."""
-    _, repo = _bootstrap_repo()
+    runtime, repo = _bootstrap_repo()
+    normalize_context_source_storage(_context_cmd_ctx(runtime, repo))
     bundle = repo.get_source_bundle_by_name(name)
     return {
         "found": bundle is not None,
@@ -525,7 +611,8 @@ def source_bundle_show(name: str) -> dict[str, Any]:
 def context_lock(ref: str) -> dict[str, Any]:
     """Lock the current context to one stored bundle or source."""
     _require_writes()
-    _, repo = _bootstrap_repo()
+    runtime, repo = _bootstrap_repo()
+    normalize_context_source_storage(_context_cmd_ctx(runtime, repo))
     bundle = repo.get_source_bundle_by_name(ref)
     if bundle is not None:
         scope = active_context_from_bundle(bundle, locked=True)
@@ -557,7 +644,8 @@ def context_unlock() -> dict[str, Any]:
 @mcp.tool()
 def context_status() -> dict[str, Any]:
     """Return the persisted locked context, if any."""
-    _, repo = _bootstrap_repo()
+    runtime, repo = _bootstrap_repo()
+    normalize_context_source_storage(_context_cmd_ctx(runtime, repo))
     scope = repo.get_locked_context()
     return {
         "locked": scope is not None,
@@ -1098,12 +1186,18 @@ def context_build(domain: str = "", days: int = 30) -> dict[str, Any]:
     runtime, repo = _bootstrap_repo()
     scope = (domain or "").strip()
     horizon_days = max(1, days)
+    context_filter = ContextScopeFilter.from_repo(repo)
 
-    goals = [
+    goals_raw = [
         _goal_to_dict(goal)
         for goal in repo.list_goal_arcs(status=None)
         if _matches_domain(goal.domain, goal.title, goal.description, domain=scope)
     ]
+    goals, excluded_goals = context_filter.filter_items(
+        goals_raw,
+        text=lambda item: " ".join([str(item.get("title", "")), str(item.get("description", ""))]),
+        domain=lambda item: str(item.get("domain", "")),
+    )
     todos = [
         task.model_dump(mode="json")
         for task in repo.list_tasks()
@@ -1111,20 +1205,46 @@ def context_build(domain: str = "", days: int = 30) -> dict[str, Any]:
         and getattr(task, "work_type", "") == "todo"
         and _matches_domain(task.title, task.description, domain=scope)
     ]
-    sessions = _recent_session_rows(repo, domain=scope, limit=5)
+    sessions_raw = _recent_session_rows(repo, domain=scope, limit=12)
+    sessions, excluded_sessions = context_filter.filter_items(
+        sessions_raw,
+        text=lambda item: " ".join(
+            [
+                str(item.get("subject_scope", "")),
+                str(item.get("task_title", "")),
+                str(item.get("actual_outcome", "")),
+                str(item.get("observed_errors", "")),
+            ]
+        ),
+    )
+    additional_sessions = max(0, len(sessions) - 5)
+    sessions = sessions[:5]
     recurring_errors = [row["observed_errors"] for row in sessions if row.get("observed_errors")]
-    useful_notes = _recent_useful_notes(runtime.vault_path, domain=scope, limit=8)
+    useful_notes_raw = _recent_useful_notes(runtime.vault_path, domain=scope, limit=16)
+    useful_notes, excluded_notes = context_filter.filter_items(
+        useful_notes_raw,
+        text=lambda item: " ".join([str(item.get("title", "")), str(item.get("path", ""))]),
+        domain=lambda item: str(Path(str(item.get("path", ""))).parent.name),
+    )
+    useful_notes = useful_notes[:8]
     graph_neighbors = _graph_neighbors_for_notes(runtime.vault_path, useful_notes[:3])
     related_concepts = _related_concepts_from_neighbors(graph_neighbors)
     orphan_notes = _orphan_notes(runtime.vault_path, domain=scope, limit=8)
     stale_notes = _stale_notes(runtime.vault_path, domain=scope, days=horizon_days, limit=8)
     weak_areas = _weak_areas(repo, recurring_errors)
     active_context_scope = _active_context_scope(repo)
-    source_bundles = [
+    source_bundles_raw = [
         bundle.model_dump(mode="json")
         for bundle in repo.list_source_bundles()[:8]
         if not scope or scope in (bundle.domain_name or "").lower() or scope in bundle.name.lower()
     ]
+    source_bundles, excluded_bundles = context_filter.filter_items(
+        source_bundles_raw,
+        text=lambda item: str(item.get("name", "")),
+        domain=lambda item: str(item.get("domain_name", "")),
+        source_refs=lambda item: list(item.get("source_refs", []) or []),
+        source_bundle_id=lambda item: str(item.get("id", "")),
+    )
 
     pending_review: list[dict[str, Any]] = []
     pending_anki: dict[str, Any] = {"suggested": 0, "export_ready": 0}
@@ -1176,8 +1296,14 @@ def context_build(domain: str = "", days: int = 30) -> dict[str, Any]:
         "private_agent_profile_reference": None,
         "omitted_context_summary": {
             "additional_thoughts": 0,
-            "additional_sessions": max(0, len(sessions) - 5),
+            "additional_sessions": additional_sessions,
             "thread_count": 0,
+            "excluded_by_context_lock": [
+                *excluded_goals,
+                *excluded_sessions,
+                *excluded_notes,
+                *excluded_bundles,
+            ][:20],
         },
     }
 

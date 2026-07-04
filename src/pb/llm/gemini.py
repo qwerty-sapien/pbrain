@@ -721,7 +721,7 @@ class GeminiClient:
                 except Exception as exc:
                     if _should_retry_rate_limit(exc):
                         fallback_model = _stable_fallback_for(current_model)
-                        if fallback_model and not fallback_used and not os.environ.get("PB_NO_FALLBACK"):
+                        if fallback_model and not fallback_used:
                             logger.debug(
                                 "gemini.generate_with_model.rate_limit_fallback",
                                 from_model=current_model,

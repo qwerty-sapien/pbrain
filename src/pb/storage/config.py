@@ -32,6 +32,14 @@ DEFAULT_PROVIDER_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
 }
+OPENAI_FAST_MODEL = "gpt-5.4-nano"
+ANTHROPIC_FAST_MODEL = "claude-haiku-4-5-20251001"
+
+_FAST_MODEL_BY_PROVIDER = {
+    "gemini": FLASH_LITE_MODEL,
+    "openai": OPENAI_FAST_MODEL,
+    "anthropic": ANTHROPIC_FAST_MODEL,
+}
 
 
 class VaultProfileConfig(BaseModel):
@@ -291,25 +299,31 @@ def _parse_role_binding(binding: str) -> tuple[str, str]:
     return provider.strip().lower(), model.strip()
 
 
-def _gemini_flash_binding() -> str:
-    return f"gemini:{FLASH_MODEL}"
+def _fast_binding_for_provider(provider_name: str, default_model: str) -> str:
+    provider = (provider_name or "gemini").strip().lower()
+    fast_model = _FAST_MODEL_BY_PROVIDER.get(provider, default_model)
+    return f"{provider}:{fast_model}"
 
 
-def _gemini_flash_lite_binding() -> str:
-    return f"gemini:{FLASH_LITE_MODEL}"
-
-
-def _should_repair_gemini_fast_role(binding: str, default_binding: str) -> bool:
+def _should_repair_fast_role(binding: str, default_binding: str) -> bool:
     clean = (binding or "").strip()
     if not clean:
         return True
-    return clean == (default_binding or "").strip() == _gemini_flash_binding()
+    default_provider, _ = _parse_role_binding(default_binding)
+    if default_provider not in _FAST_MODEL_BY_PROVIDER:
+        return False
+    return clean == (default_binding or "").strip()
+
+
+def _generated_fast_binding_for(default_binding: str) -> str:
+    provider, model = _parse_role_binding(default_binding)
+    return _fast_binding_for_provider(provider, model)
 
 
 def _default_role_bindings(provider_name: str, default_model: str) -> dict[str, str]:
     provider = (provider_name or "gemini").strip().lower()
     default_binding = f"{provider}:{default_model}"
-    fast_binding = _gemini_flash_lite_binding() if provider == "gemini" else default_binding
+    fast_binding = _fast_binding_for_provider(provider, default_model)
     return {
         "default": default_binding,
         "planner": default_binding,
@@ -401,12 +415,12 @@ class Config(BaseModel):
         if self.ui.max_content_width == 80 and self.ui.content_width_ratio > 0:
             self.ui.max_content_width = 0
 
-        if provider_name == "gemini":
-            default_binding = (self.model_roles.default or "").strip()
-            fast_binding = _gemini_flash_lite_binding()
-            if _should_repair_gemini_fast_role(self.model_roles.fast, default_binding):
+        default_binding = (self.model_roles.default or "").strip()
+        if default_binding:
+            fast_binding = _generated_fast_binding_for(default_binding)
+            if _should_repair_fast_role(self.model_roles.fast, default_binding):
                 self.model_roles.fast = fast_binding
-            if _should_repair_gemini_fast_role(self.model_roles.fast_inference, default_binding):
+            if _should_repair_fast_role(self.model_roles.fast_inference, default_binding):
                 self.model_roles.fast_inference = fast_binding
 
         if not self.model_roles.fast_inference and self.model_roles.fast:
@@ -877,9 +891,10 @@ def set_default_model_binding(binding: str, *, path: Optional[Path] = None) -> C
         if role_name == "default" or not current or current == old_default:
             setattr(cfg.model_roles, role_name, desired[role_name])
 
+    old_generated_fast = _generated_fast_binding_for(old_default)
     for role_name in ("fast", "fast_inference"):
         current = getattr(cfg.model_roles, role_name)
-        if not current or current == old_default or _should_repair_gemini_fast_role(current, old_default):
+        if not current or current in {old_default, old_generated_fast}:
             setattr(cfg.model_roles, role_name, desired[role_name])
 
     save_config(cfg, path=path)

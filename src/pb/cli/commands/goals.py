@@ -48,10 +48,12 @@ from pb.core.goal_roadmaps import (
     write_goal_roadmap_note,
 )
 from pb.core.learning_block_flow import collect_revision_feedback, learner_profile_suffix
+from pb.core.refinement_memory import record_refinement_memory, refinement_memory_prompt_suffix
 from pb.core.graph_writer import make_slug
 from pb.core.naming import (
     NameService,
     apply_generated_title,
+    deterministic_names,
     stored_display_title,
 )
 from pb.core.product_control import ProductControlEngine
@@ -296,6 +298,7 @@ def _resolve_goal_draft(
     artifact_kind: str,
     artifact_id: str,
     existing_goal: GoalArc | None = None,
+    deterministic: bool = False,
 ) -> tuple[GoalDraft, GeneratedDraft | None, object]:
     """Run staged goal drafting with one clarification and a manual fallback."""
 
@@ -346,6 +349,19 @@ def _resolve_goal_draft(
             clarifier_bundle=clarifier_bundle,
         )
     prompt += feedback_prompt_suffix(runtime_ctx.vault_path, "goal")
+    prompt += refinement_memory_prompt_suffix(surface="goal", topic=raw_goal)
+
+    if deterministic:
+        draft = _seed_goal_draft(raw_goal, clarification=clarification)
+        recorder.add(
+            "draft",
+            {
+                "mode": "deterministic",
+                "title": draft.title,
+                "execution_mode": draft.execution_mode,
+            },
+        )
+        return draft, None, recorder
 
     try:
         draft_result = runtime.generate_draft(
@@ -884,11 +900,16 @@ def _resolve_goal_roadmap(
     raw_goal: str,
     goal_draft: GoalDraft,
     existing_goal: GoalArc | None = None,
+    deterministic: bool = False,
 ) -> GoalRoadmapDraft:
     """Generate a structured roadmap for a goal, with deterministic fallback."""
+    if deterministic:
+        return fallback_goal_roadmap(goal_draft)
+
     runtime = runtime_for_ctx(ctx)
     prompt = build_goal_roadmap_prompt(goal_draft, raw_goal, existing_goal=existing_goal)
     prompt += feedback_prompt_suffix(ctx.obj["runtime"].vault_path, "goal_roadmap")
+    prompt += refinement_memory_prompt_suffix(surface="goal", topic=raw_goal)
     prompt += learner_profile_suffix(ctx.obj["repo"], ctx.obj["runtime"])
     try:
         return runtime.generate_draft(
@@ -899,6 +920,14 @@ def _resolve_goal_roadmap(
     except DraftGenerationError as exc:
         get_err_console().print(f"[warn]{exc.to_user_message()}[/]")
         return fallback_goal_roadmap(goal_draft)
+
+
+def _uses_default_draft_runtime(runtime: object) -> bool:
+    """Return True when goal creation would call the real draft runtime."""
+
+    method = getattr(runtime, "generate_draft", None)
+    func = getattr(method, "__func__", method)
+    return getattr(func, "__module__", "") == "pb.llm.runtime"
 
 
 def _refine_goal_roadmap(
@@ -918,6 +947,7 @@ def _refine_goal_roadmap(
         + "\n\nUser refinement:\n"
         + instruction.strip()
         + "\n\n"
+        + refinement_memory_prompt_suffix(surface="goal", topic=raw_goal)
         + learner_profile_suffix(ctx.obj["repo"], ctx.obj["runtime"])
     )
     try:
@@ -1070,7 +1100,7 @@ def list_goals():
         horizon = goal.horizon.value if goal.horizon else "N/A"
         domain = f" · {goal.domain}" if getattr(goal, "domain", "") else ""
         mode = getattr(goal, "execution_mode", "mixed")
-        typer.echo(f"  {display_ref(goal, 'goal')}  [{horizon} · {mode}{domain}] {stored_display_title(goal)}")
+        typer.echo(f"  {goal.id[:8]}  [{horizon} · {mode}{domain}] {stored_display_title(goal)}")
 
 
 def _create_goal_via_llm(
@@ -1086,6 +1116,7 @@ def _create_goal_via_llm(
     """Shared LLM-backed goal creation. Returns the persisted goal or None when cancelled."""
     runtime = runtime_for_ctx(ctx)
     repo = ctx.obj["repo"]
+    deterministic_noninteractive = yes and not sys.stdin.isatty() and _uses_default_draft_runtime(runtime)
 
     # Specificity gate — warn on vague (1-2 word) input in TTY mode only
     if needs_single_clarification(raw_goal):
@@ -1102,9 +1133,15 @@ def _create_goal_via_llm(
         source_scope=f"goal:{raw_goal}",
         artifact_kind="goal",
         artifact_id=raw_goal,
+        deterministic=deterministic_noninteractive,
     )
     draft.horizon = horizon
-    roadmap = _resolve_goal_roadmap(ctx, raw_goal=raw_goal, goal_draft=draft)
+    roadmap = _resolve_goal_roadmap(
+        ctx,
+        raw_goal=raw_goal,
+        goal_draft=draft,
+        deterministic=deterministic_noninteractive,
+    )
     roadmap = _review_goal_roadmap(ctx, raw_goal=raw_goal, goal_draft=draft, roadmap=roadmap, yes=yes)
     roadmap = ensure_roadmap_populated(roadmap, draft)
     recorder.add(
@@ -1118,12 +1155,18 @@ def _create_goal_via_llm(
 
     accepted = yes
     while not accepted:
-        decision = preview_decision(yes=False, action_label="Create this goal")
+        decision = preview_decision(yes=False, action_label="Create this goal", allow_refinement=True)
         if decision.kind == "accept":
             accepted = True
             break
         if decision.kind == "cancel":
             break
+        record_refinement_memory(
+            repo,
+            surface="goal",
+            topic=raw_goal,
+            refinement=decision.text,
+        )
         roadmap = _refine_goal_roadmap(
             ctx,
             raw_goal=raw_goal,
@@ -1157,17 +1200,17 @@ def _create_goal_via_llm(
             recorder.finalize("cancelled", reason="duplicate_detected")
             return None
 
-    goal_names = NameService(runtime).generate_names(
-        "goal",
-        raw_goal,
-        {
-            "domain": draft.domain,
-            "subject": draft.domain or draft.title,
-            "activity_type": "goal",
-            "execution_mode": draft.execution_mode,
-            "success_definition": draft.success_definition,
-        },
-    )
+    naming_context = {
+        "domain": draft.domain,
+        "subject": draft.domain or draft.title,
+        "activity_type": "goal",
+        "execution_mode": draft.execution_mode,
+        "success_definition": draft.success_definition,
+    }
+    if deterministic_noninteractive:
+        goal_names = deterministic_names("goal", raw_goal, naming_context)
+    else:
+        goal_names = NameService(runtime).generate_names("goal", raw_goal, naming_context)
 
     goal = _persist_goal(
         repo,
@@ -1282,7 +1325,40 @@ def refine_goal(
     _render_goal_preview(draft, title="Refined Goal Draft")
     accepted = yes
     if not accepted:
-        accepted = preview_decision(yes=False, action_label="Update this goal").kind == "accept"
+        while True:
+            decision = preview_decision(yes=False, action_label="Update this goal", allow_refinement=True)
+            if decision.kind == "accept":
+                accepted = True
+                break
+            if decision.kind == "cancel":
+                break
+            record_refinement_memory(
+                repo,
+                surface="goal",
+                topic=goal.title,
+                refinement=decision.text,
+            )
+            refine_prompt = (
+                prompt
+                + "\n\nCurrent refined goal draft JSON:\n"
+                + str(draft.model_dump(mode="json"))
+                + "\n\nUser refinement:\n"
+                + decision.text.strip()
+                + "\n\n"
+                + feedback_prompt_suffix(ctx.obj["runtime"].vault_path, "goal")
+                + refinement_memory_prompt_suffix(surface="goal", topic=goal.title)
+            )
+            try:
+                draft_result = runtime.generate_draft(
+                    GoalDraft,
+                    refine_prompt,
+                    source_scope=f"goal_refine:{goal.id}",
+                )
+                draft = _default_goal_fields(draft_result.payload)
+                recorder.add("refine", {"instruction": decision.text})
+                _render_goal_preview(draft, title="Refined Goal Draft")
+            except DraftGenerationError as exc:
+                get_err_console().print(f"[warn]{exc.to_user_message()}[/]")
     if not accepted:
         if draft_result is not None:
             repo.create_generation_provenance(

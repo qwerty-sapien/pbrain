@@ -354,7 +354,7 @@ def render_json_preview(title: str, payload: object) -> None:
     render_styled_preview(title=title, rows=rows)
 
 
-def preview_decision(*, yes: bool, action_label: str) -> ConfirmationDecision:
+def preview_decision(*, yes: bool, action_label: str, allow_refinement: bool = False) -> ConfirmationDecision:
     """Return the user's intent for a draft preview."""
     auto_yes = (
         yes
@@ -374,7 +374,8 @@ def preview_decision(*, yes: bool, action_label: str) -> ConfirmationDecision:
         console = get_console()
         console.print(f"[warn]Preview only. Re-run with `--yes` to {action_label.lower()}.[/]")
         return ConfirmationDecision("cancel")
-    return prompt_confirmation(f"{action_label}?", default=True, mode="preview")
+    mode = "preview_refine" if allow_refinement else "preview"
+    return prompt_confirmation(f"{action_label}?", default=True, mode=mode)
 
 
 def confirm_preview(*, yes: bool, action_label: str) -> bool:

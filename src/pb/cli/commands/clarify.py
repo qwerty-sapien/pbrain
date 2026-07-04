@@ -17,7 +17,7 @@ from pb.cli.active_session import resolve_active_session_preflight
 from pb.cli.command_runner import run_internal_command
 from pb.cli.console import get_console
 from pb.cli.llm_guard import llm_requirement_message, runtime_for_ctx
-from pb.cli.preview import confirm_preview, markdown_learning_plan_lines, render_markdown_preview
+from pb.cli.preview import markdown_learning_plan_lines, preview_decision, render_markdown_preview
 from pb.core.action_routing import route_learning_intent
 from pb.core.clarifier import (
     ClarifierService,
@@ -29,6 +29,7 @@ from pb.core.clarifier import (
 )
 from pb.core.feedback_profile import feedback_prompt_suffix
 from pb.core.learning_block_flow import learner_profile_suffix
+from pb.core.refinement_memory import record_refinement_memory, refinement_memory_prompt_suffix
 from pb.core.learning_metadata import parse_learning_task_metadata
 from pb.core.learning_partner import LearningPartnerSession
 from pb.core.learning_curriculum import (
@@ -96,6 +97,7 @@ def _build_curriculum_prompt(
     clarifier_bundle,
     clarifications: dict[str, str],
     feedback_suffix: str,
+    active_context: str = "",
 ) -> str:
     clarification_lines = "".join(
         f"- {question}: {answer}\n"
@@ -114,6 +116,13 @@ def _build_curriculum_prompt(
         "If prior evidence is weak or absent, assume the safer lower starting point and materialize prerequisite blocks first.\n"
         "Do not pretend the learner can jump straight to the terminal topic unless the context clearly proves the prerequisites are already solid.\n"
         + learning_intent_style_guidance()
+        + (
+            "A learning context is LOCKED. Build the plan strictly around this "
+            "source and ignore any unrelated prior goals or topics.\n"
+            f"{active_context}\n"
+            if active_context
+            else ""
+        )
         + f"Topic: {topic}\n"
         + f"Preferred branch: {preferred_branch}\n"
         + f"Matched goal: {matched_goal.title if matched_goal else ''}\n"
@@ -123,6 +132,22 @@ def _build_curriculum_prompt(
         + f"{feedback_suffix}"
         + "Use Bloom targets for study blocks and practice stages for practice blocks.\n"
         + f"{artifact_presentation_prompt(include_dependency_layout=True)}"
+    )
+
+
+def _build_curriculum_refinement_prompt(
+    *,
+    base_prompt: str,
+    draft: CurriculumPlanDraft,
+    instruction: str,
+) -> str:
+    return (
+        f"{base_prompt}\n\n"
+        "Refine the existing curriculum draft using the learner's latest correction.\n"
+        "Honor the correction as the highest-priority user customization for this action/topic.\n"
+        "Keep useful existing structure, but redraw blocks when needed to satisfy the request.\n"
+        f"Existing draft JSON: {draft.model_dump_json()}\n"
+        f"Learner refinement request: {instruction.strip()}\n"
     )
 
 
@@ -278,8 +303,14 @@ def _launch_clarification_plan(
     runtime = runtime_for_ctx(ctx)
     runtime_ctx = ctx.obj["runtime"]
     console = get_console()
-    matched_goal = match_goal(repo, topic)
-    matched_track = match_track(repo, topic)
+    try:
+        locked_context = repo.get_locked_context()
+    except Exception:
+        locked_context = None
+    # Hard-scope: when a context is locked, do NOT adopt any pre-existing goal or
+    # track — the locked source defines the scope, not ambient vault history.
+    matched_goal = None if locked_context is not None else match_goal(repo, topic)
+    matched_track = None if locked_context is not None else match_track(repo, topic)
     control_engine = ProductControlEngine(repo=repo, runtime=runtime)
     _, control_state = control_engine.load_state(
         scope="artifact",
@@ -314,13 +345,14 @@ def _launch_clarification_plan(
     draft_result = None
 
     if probe.available:
+        locked_domain = getattr(locked_context, "label", "") if locked_context is not None else ""
         clarifier_context = build_clarifier_context(
             repo,
             runtime_ctx,
             raw_request=topic,
             scope="learn",
             mode=preferred_branch,
-            domain=getattr(matched_goal, "domain", "") or getattr(matched_track, "name", "") or topic,
+            domain=locked_domain or getattr(matched_goal, "domain", "") or getattr(matched_track, "name", "") or topic,
             control_state=control_state,
         )
         questions = ClarifierService(runtime).generate_questions(
@@ -345,6 +377,11 @@ def _launch_clarification_plan(
         )
         recorder.add("clarify", clarifications)
 
+        active_context_contract = ""
+        if locked_context is not None:
+            from pb.cli.context_runtime import context_prompt_contract
+
+            active_context_contract = context_prompt_contract(locked_context)
         prompt = _build_curriculum_prompt(
             topic=topic,
             preferred_branch=preferred_branch,
@@ -352,7 +389,12 @@ def _launch_clarification_plan(
             matched_track=matched_track,
             clarifier_bundle=clarifier_bundle,
             clarifications=clarifications,
-            feedback_suffix=feedback_prompt_suffix(runtime_ctx.vault_path, "learn") + learner_profile_suffix(repo, runtime_ctx),
+            feedback_suffix=(
+                feedback_prompt_suffix(runtime_ctx.vault_path, "learn")
+                + refinement_memory_prompt_suffix(surface="plan", topic=topic)
+                + learner_profile_suffix(repo, runtime_ctx)
+            ),
+            active_context=active_context_contract,
         )
 
         try:
@@ -396,23 +438,56 @@ def _launch_clarification_plan(
         recorder.finalize("empty")
         raise typer.BadParameter("No clarified learning plan was generated.")
 
-    sections = [
-        (
-            "Plan",
-            markdown_learning_plan_lines(draft.blocks, presentation=draft.presentation),
+    while True:
+        sections = [
+            (
+                "Plan",
+                markdown_learning_plan_lines(draft.blocks, presentation=draft.presentation),
+            )
+        ]
+        render_markdown_preview(
+            title="Clarified Learning Plan",
+            rows=[
+                ("Topic", topic),
+                ("Learner state", draft.learner_state),
+            ],
+            sections=sections,
         )
-    ]
-    render_markdown_preview(
-        title="Clarified Learning Plan",
-        rows=[
-            ("Topic", topic),
-            ("Learner state", draft.learner_state),
-        ],
-        sections=sections,
-    )
-    if not confirm_preview(yes=yes, action_label="Create this learning plan"):
-        recorder.finalize("cancelled")
-        raise typer.Exit(code=0)
+        decision = preview_decision(yes=yes, action_label="Create this learning plan", allow_refinement=True)
+        if decision.kind == "accept":
+            break
+        if decision.kind == "cancel":
+            recorder.finalize("cancelled")
+            raise typer.Exit(code=0)
+        record_refinement_memory(
+            repo,
+            surface="plan",
+            topic=topic,
+            refinement=decision.text,
+        )
+        if probe.available:
+            try:
+                draft, draft_result = _generate_curriculum_plan(
+                    runtime,
+                    prompt=_build_curriculum_refinement_prompt(
+                        base_prompt=prompt,
+                        draft=draft,
+                        instruction=decision.text,
+                    ),
+                    source_scope=f"clarify_refine:{preferred_branch}:{topic}",
+                )
+                recorder.add(
+                    "refine",
+                    {
+                        "model": draft_result["model"],
+                        "attempts": draft_result["attempts"],
+                        "instruction": decision.text,
+                    },
+                )
+            except DraftGenerationError as exc:
+                console.print(f"[warn]{exc.to_user_message()}[/]")
+        else:
+            console.print("[warn]Live model unavailable; saved the refinement but kept the current fallback plan.[/]")
 
     if matched_goal is None:
         matched_goal = _persist_lightweight_goal(

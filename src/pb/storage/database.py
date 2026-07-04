@@ -1208,6 +1208,49 @@ def _migrate_context_runtime(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_second_brain_memory(conn: sqlite3.Connection) -> None:
+    """Create rebuildable second-brain memory/cache tables."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS interest_signals (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            normalized_label TEXT NOT NULL,
+            parent_label TEXT NOT NULL DEFAULT '',
+            top_label TEXT NOT NULL DEFAULT '',
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL DEFAULT '',
+            source_ref TEXT NOT NULL DEFAULT '',
+            weight REAL NOT NULL DEFAULT 1.0,
+            occurred_at TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_interest_signals_label
+            ON interest_signals(normalized_label);
+        CREATE INDEX IF NOT EXISTS idx_interest_signals_time
+            ON interest_signals(occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_interest_signals_parent
+            ON interest_signals(top_label, parent_label);
+
+        CREATE TABLE IF NOT EXISTS encoding_suggestion_rejections (
+            suggestion_hash TEXT PRIMARY KEY,
+            target_concept TEXT NOT NULL,
+            facet TEXT NOT NULL,
+            value TEXT NOT NULL DEFAULT '',
+            source_provenance TEXT NOT NULL DEFAULT '',
+            evidence_hash TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_encoding_rejections_target
+            ON encoding_suggestion_rejections(target_concept);
+        """
+    )
+    conn.commit()
+
+
 def init_db(path: Optional[Path] = None) -> None:
     """
     Initialize the database with schema.
@@ -1261,6 +1304,7 @@ def init_db(path: Optional[Path] = None) -> None:
         _migrate_context_runtime(conn)
         _migrate_concept_confidence(conn)        # Phase 16 — concept confidence substrate (D-16-17)
         _migrate_concept_confidence_burst(conn)  # Phase 16 — drill-burst recovery columns (D-16-27)
+        _migrate_second_brain_memory(conn)
         conn.commit()
     finally:
         conn.close()

@@ -24,6 +24,7 @@ dependencies = [
     "google-api-python-client>=2.194.0",
     "google-auth-oauthlib>=1.3.1",
     "genanki",
+    "pypdf>=4.0.0",
     "prompt-toolkit>=3.0.52",
     "sqlite-vec>=0.1.9",
     "google-cloud-storage>=2.0.0",

@@ -1,6 +1,6 @@
 # ProductiveBrain
 
-ProductiveBrain is a terminal-based system for turning learning intent into study, deliberate practice, evidence, and recall.
+ProductiveBrain is a terminal-based system for turning learning intent into the next concrete session: study, deliberate practice, evidence, and recall.
 
 The key long-running workflows are:
 
@@ -22,7 +22,7 @@ or you can just start a session with: `pb teach`, `pb study`, or `pb practice` (
 - Generates scoped Anki candidates with `genanki` export support.
 - Stores generated notes in a quarantine inbox before any merge into the vault.
 - Manages named vault profiles for Obsidian-style Markdown vaults.
-- Exposes an MCP server for agent clients while keeping the CLI as the primary interface.
+- Exposes the `productivebrain-mcp` server for agent clients while keeping the CLI as the primary interface.
 
 ## Install
 
@@ -64,6 +64,7 @@ pb do "I want to practise Bayes rule word problems with base rates"
 pb practise "Bayes word problems" --duration 5m --drill "posterior odds" --cues "prior, likelihood" --steps --yes
 pb finish "still mixing up P(A|B) and P(B|A)" --skip --yes
 pb review day --skip
+pb review week --skip
 pb next
 ```
 

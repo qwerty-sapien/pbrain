@@ -49,6 +49,7 @@ from pb.core.clarifier import (
 from pb.core.enums import SessionMode
 from pb.core.feedback_profile import feedback_prompt_suffix
 from pb.core.learning_block_flow import collect_revision_feedback, learner_profile_suffix
+from pb.core.refinement_memory import record_refinement_memory, refinement_memory_prompt_suffix
 from pb.core.learning_partner import LearningPartnerSession
 from pb.core.learning_tasks import infer_learning_duration_minutes, materialize_learning_task
 from pb.core.naming import (
@@ -168,8 +169,35 @@ def _collect_practise_targets(repo) -> list[str]:
     return candidates
 
 
-def _pick_practise_target(repo) -> Optional[str]:
+def _pick_practise_target(repo, *, vault_path=None) -> Optional[str]:
     from pb.cli.pickers import pick_single_choice
+    from pb.core.concept_navigator import ConceptNavigator
+    from pb.core.context_scope import ContextScopeFilter
+    from pb.core.interest_hierarchy import InterestHierarchyService
+
+    context_filter = ContextScopeFilter.from_repo(repo)
+    directions = InterestHierarchyService(repo, vault_path=vault_path).build(
+        limit=6,
+        context_filter=context_filter,
+    )
+    if directions.nodes:
+        selected_ref = pick_single_choice(
+            [(node.ref, node.label if node.level == "leaf" else f"{node.label} ->") for node in directions.nodes],
+            title="Select practice target",
+            details=[node.reason for node in directions.nodes],
+        )
+        selected_node = next((node for node in directions.nodes if node.ref == selected_ref), None)
+        if selected_node is not None:
+            navigator = ConceptNavigator(repo=repo, vault_path=vault_path, context_filter=context_filter)
+            concept_candidates = navigator.candidates(selected_node.label, parent=selected_node.label, limit=8)
+            if concept_candidates:
+                concept_choice = pick_single_choice(
+                    [(candidate.title, candidate.title) for candidate in concept_candidates],
+                    title=f"{selected_node.label} — pick drill focus",
+                    details=[candidate.reason for candidate in concept_candidates],
+                )
+                return concept_choice or selected_node.label
+            return selected_node.label
 
     choices = _collect_practise_targets(repo)
     if choices:
@@ -317,13 +345,15 @@ def _build_practise_prompt(
             "Each step must include `title`, `instruction`, and `success_check`.\n"
             "Use the steps to sequence drills, constraints, and checkpoints in the most effective practice order.\n"
             "If any step instruction or check contains LaTeX that should be treated as math, "
-            "return it as an object with `text` and `is_latex: true`.\n"
+            "return it as an object with `text` and `is_latex: true`; wrap inline math as `$...$`, "
+            "display math as `$$...$$`, and keep leading backslashes on commands such as `\\mathbb`.\n"
         )
     else:
         prompt += "Leave `steps` as an empty list unless stepwise guidance is explicitly requested.\n"
     prompt += clarifier_prompt_block(clarifier_bundle)
     prompt += artifact_presentation_prompt()
     prompt += feedback_prompt_suffix(vault_path, "practise")
+    prompt += refinement_memory_prompt_suffix(surface="practise", topic=skill_text)
     return prompt
 
 
@@ -341,11 +371,12 @@ def launch_practise_session(
     from pb.cli.commands.execute import start_task_internal
 
     repo = ctx.obj["repo"]
+    runtime_ctx = ctx.obj.get("runtime")
     console = get_console()
     auto_yes = bool(yes or ((ctx.obj or {}).get("yes")))
     skill_text = (skill or "").strip()
     if not skill_text:
-        skill_text = _pick_practise_target(repo) or ""
+        skill_text = _pick_practise_target(repo, vault_path=getattr(runtime_ctx, "vault_path", None)) or ""
     if not skill_text:
         raise typer.BadParameter("A practice target is required.")
     if not resolve_active_session_preflight(
@@ -565,6 +596,13 @@ def launch_practise_session(
             continue
 
         revision_note = revision_feedback.free_text
+        if revision_note.strip():
+            record_refinement_memory(
+                repo,
+                surface="practise",
+                topic=block.subject_scope or skill_text,
+                refinement=revision_note,
+            )
 
         skill_text = block.subject_scope or skill_text
         drill = block.drill_type or drill or skill_text

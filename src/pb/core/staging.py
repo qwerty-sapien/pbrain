@@ -83,13 +83,34 @@ class StageRecorder:
         return path
 
 
+def _active_context_digest(scope) -> dict[str, Any]:
+    """Compact, prompt-safe description of a locked context scope."""
+
+    return {
+        "label": getattr(scope, "label", ""),
+        "scope_mode": getattr(scope, "scope_mode", ""),
+        "scope_boundary": getattr(scope, "scope_boundary", ""),
+        "source_refs": list(getattr(scope, "source_refs", []) or [])[:6],
+    }
+
+
 def build_learning_context(repo, runtime, *, limit: int = 3) -> dict[str, Any]:
-    """Gather a small local snapshot before asking the user anything."""
+    """Gather a small local snapshot before asking the user anything.
+
+    When a context is locked we hard-scope: unrelated goals and past sessions are
+    withheld so the locked source — not ambient vault history — defines the focus.
+    """
 
     active_session = repo.get_active_session()
-    active_goals = repo.list_goal_arcs(status=None)[:limit]
+    try:
+        locked_context = repo.get_locked_context() if repo is not None else None
+    except Exception:
+        locked_context = None
+    hard_scoped = locked_context is not None
+
+    active_goals = [] if hard_scoped else repo.list_goal_arcs(status=None)[:limit]
     recent_sessions = []
-    if repo is not None:
+    if repo is not None and not hard_scoped:
         rows = []
         for task in repo.list_tasks():
             for session in repo.list_sessions_for_task(task.id):
@@ -134,6 +155,7 @@ def build_learning_context(repo, runtime, *, limit: int = 3) -> dict[str, Any]:
             for goal in active_goals
         ],
         "recent_sessions": recent_sessions,
+        "active_context": _active_context_digest(locked_context) if hard_scoped else None,
         "provider_health": provider_health,
         "pending_thoughts": pending_thoughts,
     }
