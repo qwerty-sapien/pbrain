@@ -84,7 +84,7 @@ def _record_candidate_selection(candidate) -> None:
 def _immediate_candidates(candidates) -> list:
     """Keep at most one operational row for `pb next`."""
 
-    for source in ("active_session", "reminder"):
+    for source in ("active_session", "learning_transition", "paused_session", "reminder"):
         for candidate in candidates:
             if getattr(candidate, "source", "") == source:
                 return [candidate]
@@ -219,10 +219,19 @@ def next_action(
     within: Optional[str] = typer.Option(None, "--within", help="Drill into one next-direction node"),
     schedule: Optional[int] = typer.Option(None, "--schedule", "-s", help="Remind me about the top recommendation in N minutes"),
     reminder: Optional[str] = typer.Option(None, "--reminder", help="Open the action chooser for a queued reminder"),
+    transition: Optional[str] = typer.Option(None, "--transition", help="Open a queued learning transition"),
 ):
     """Show compact next directions from local learning context."""
-    if reminder:
-        _run_reminder_action(ctx, reminder)
+    reminder_ref = reminder if isinstance(reminder, str) and reminder else ""
+    transition_ref = transition if isinstance(transition, str) and transition else ""
+    schedule_minutes = schedule if isinstance(schedule, int) else None
+    if reminder_ref:
+        _run_reminder_action(ctx, reminder_ref)
+        return
+    if transition_ref:
+        from pb.cli.learning_transition_flow import process_pending_learning_transitions
+
+        process_pending_learning_transitions(ctx, interactive=True)
         return
 
     repo = ctx.obj["repo"]
@@ -245,7 +254,7 @@ def next_action(
     )
     nodes = list(directions.nodes)
     lock_hint = _lock_hint(context_filter, len(directions.excluded_by_lock))
-    if schedule is not None:
+    if schedule_minutes is not None:
         schedule_target = immediate[0] if immediate else all_candidates[0] if all_candidates else None
         if schedule_target is None and nodes:
             first_node = nodes[0]
@@ -260,8 +269,8 @@ def next_action(
                 short_reason="No concrete local action is ready yet.",
                 backing_command="next",
             )
-        _schedule_reminder(repo, schedule_target, schedule)
-        console.print(f"[success]Reminder scheduled:[/] in {schedule} min for {schedule_target.human_label}")
+        _schedule_reminder(repo, schedule_target, schedule_minutes)
+        console.print(f"[success]Reminder scheduled:[/] in {schedule_minutes} min for {schedule_target.human_label}")
         if verbose_mode:
             console.print(f"[dim]Command: pb {schedule_target.backing_command}[/]")
         return

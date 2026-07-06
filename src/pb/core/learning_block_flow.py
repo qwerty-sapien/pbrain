@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pb.cli.console import get_console
-from pb.cli.helpers import prompt_text
+from pb.cli.helpers import parse_duration, prompt_text
 from pb.cli.pickers import pick_single_choice
 from pb.core.learner_memory import build_global_learner_profile, learner_profile_prompt
 from pb.core.product_control import AdaptiveOption, ControlDecision, ControlState, ProductControlEngine
@@ -24,6 +24,7 @@ class RevisionFeedbackResult:
     decision: ControlDecision
     state: ControlState
     prompt_suffix: str
+    requested_minutes: int | None = None
 
 
 def learner_profile_suffix(repo, runtime_ctx) -> str:
@@ -121,6 +122,21 @@ def collect_revision_feedback(
         free_text = prompt_text("Discuss", default="").strip()
         if not free_text:
             return None
+    elif chosen.key == "set_time":
+        raw_time = prompt_text("Time", default="").strip()
+        requested_minutes = parse_duration(raw_time) if raw_time else None
+        if requested_minutes is None:
+            console = get_console()
+            console.print("[warn]Use a duration like 20m, 45 min, or 1h.[/]")
+            return None
+        free_text = (
+            f"Use a {requested_minutes}-minute time budget. "
+            "If this is shorter, narrow the scope and make the syllabus succinct; "
+            "if longer, broaden only where useful and add checkpoints."
+        )
+        get_console().print(
+            f"[dim]Time set to {requested_minutes} min; the next draft will resize scope to fit.[/]"
+        )
     elif chosen.control_signal in {"needs_prerequisite", "too_abstract", "too_basic", "too_applied"}:
         if chosen.payload.get("restart_point"):
             free_text = f"Restart from {chosen.payload['restart_point']}."
@@ -168,4 +184,5 @@ def collect_revision_feedback(
         decision=decision,
         state=state,
         prompt_suffix=prompt_suffix,
+        requested_minutes=requested_minutes if chosen.key == "set_time" else None,
     )

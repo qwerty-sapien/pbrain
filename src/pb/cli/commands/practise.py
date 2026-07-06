@@ -606,7 +606,7 @@ def launch_practise_session(
 
         skill_text = block.subject_scope or skill_text
         drill = block.drill_type or drill or skill_text
-        requested_minutes = block.duration_minutes
+        requested_minutes = revision_feedback.requested_minutes or block.duration_minutes
         matched_goal = _match_goal(repo, skill_text)
         matched_track = _match_track(repo, skill_text)
         domain_hint = (
@@ -781,11 +781,13 @@ def launch_practise_session(
                 console.print(f"[dim]Partner note:[/] {result.note_path.relative_to(runtime_ctx.vault_path)}")
             if result.action == "command" and result.command:
                 run_internal_command(ctx, result.command)
+                if result.follow_up_command:
+                    run_internal_command(ctx, result.follow_up_command)
                 active_session = repo.get_active_session()
                 if active_session is not None and active_session.task_id == task.id:
                     continue
                 return
-            if result.action == "finish":
+            if result.action in {"finish", "next"}:
                 # D-16-27: drill-burst streak management at session end
                 from pb.core.confidence_model import THRESHOLD_NONE, BURST_N, clamp_score
                 _prac_records = repo.list_concept_confidence(_practise_concept_id)
@@ -819,7 +821,16 @@ def launch_practise_session(
                         )
                 from pb.cli.commands.execute import finish_task
 
-                finish_task(ctx, note_words=[result.summary], completion=100, debrief=False, skip=False)
+                finish_task(
+                    ctx,
+                    note_words=[result.summary],
+                    completion=100,
+                    yes=result.skip_finish_assessment,
+                    debrief=False,
+                    skip=result.skip_finish_assessment,
+                )
+                if result.follow_up_command:
+                    run_internal_command(ctx, result.follow_up_command)
                 return
             if result.action == "pause":
                 paused = ctx.obj["factory"]["session_service"]().pause_session(outcome=result.summary)

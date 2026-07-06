@@ -672,7 +672,7 @@ def _seed_study_block(
                 "duration_minutes": duration or infer_learning_duration_minutes("study", scope),
                 "target_bloom_stage": (level or BloomStage.APPLY).value,
                 "study_mode": "active recall",
-                "success_check": f"Explain {scope} from memory and work one concrete example.",
+                "success_check": f"Explain the core theory of {scope} from memory and identify one valid application boundary.",
                 "reason": f"Keep progress moving on {scope} even without a live model.",
             }
         ],
@@ -718,7 +718,9 @@ def _build_study_prompt(
         + f"Goal title: {matched_goal.title if matched_goal else ''}\n"
         + f"{stage_instruction}"
         + f"{duration_instruction}"
-        + "The block should be concrete, active, and retrieval-oriented.\n"
+        + "The block should be conceptual, theory-first, active-recall-oriented, and not a performance drill.\n"
+        + "For skills such as music, sport, language production, or coding, study means clarifying the underlying theory/mechanism first; "
+        + "do not ask for execution reps unless the user explicitly chose practise.\n"
         + "`subject_scope` must name the exact competency slice for this block, not a vague paraphrase of the topic.\n"
         + "For ambitious topics, separate prerequisite progress from target progress.\n"
         + "If the learner's prerequisite readiness is unproven, lower the scope to the earliest useful missing layer and name the exact concepts or capabilities to cover.\n"
@@ -1080,7 +1082,7 @@ def launch_study_session(
             )
 
         topic_text = block.subject_scope or topic_text
-        requested_minutes = block.duration_minutes
+        requested_minutes = revision_feedback.requested_minutes or block.duration_minutes
         matched_goal = _match_goal(repo, topic_text)
         matched_track = _match_track(repo, topic_text)
         domain_hint = (
@@ -1272,11 +1274,13 @@ def launch_study_session(
                 console.print(f"[dim]Partner note:[/] {result.note_path.relative_to(runtime_ctx.vault_path)}")
             if result.action == "command" and result.command:
                 run_internal_command(ctx, result.command)
+                if result.follow_up_command:
+                    run_internal_command(ctx, result.follow_up_command)
                 active_session = repo.get_active_session()
                 if active_session is not None and active_session.task_id == task.id:
                     continue
                 return
-            if result.action == "finish":
+            if result.action in {"finish", "next"}:
                 # D-16-19: update confidence from study session outcome
                 # Re-fetch current score at finish time (pre-session _study_records is stale)
                 from datetime import datetime, timedelta
@@ -1300,7 +1304,16 @@ def launch_study_session(
                     )
                 from pb.cli.commands.execute import finish_task
 
-                finish_task(ctx, note_words=[result.summary], completion=100, debrief=False, skip=False)
+                finish_task(
+                    ctx,
+                    note_words=[result.summary],
+                    completion=100,
+                    yes=result.skip_finish_assessment,
+                    debrief=False,
+                    skip=result.skip_finish_assessment,
+                )
+                if result.follow_up_command:
+                    run_internal_command(ctx, result.follow_up_command)
                 return
             if result.action == "pause":
                 paused = ctx.obj["factory"]["session_service"]().pause_session(outcome=result.summary)

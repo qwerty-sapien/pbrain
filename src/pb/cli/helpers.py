@@ -22,6 +22,12 @@ from pb.core.naming import stored_short_title
 from pb.core.renderables import renderable_cli_text
 
 try:
+    from wcwidth import wcwidth, wcswidth
+except Exception:  # pragma: no cover - prompt_toolkit normally provides wcwidth
+    wcwidth = None  # type: ignore[assignment]
+    wcswidth = None  # type: ignore[assignment]
+
+try:
     from prompt_toolkit.application import Application
     from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.keys import Keys
@@ -159,6 +165,14 @@ def _task_label(task, active_task_id: Optional[str] = None) -> str:
 _SCROLL_THRESHOLD = 30
 
 
+def _display_width(text: str) -> int:
+    """Return terminal-cell width for text, falling back to len()."""
+    if wcswidth is None:
+        return len(text)
+    measured = wcswidth(text)
+    return measured if measured >= 0 else len(text)
+
+
 def _truncate_to_width(line: str, width: int) -> str:
     """Clip a rendered line so it occupies exactly one terminal row.
 
@@ -169,9 +183,21 @@ def _truncate_to_width(line: str, width: int) -> str:
     single row regardless of the terminal's autowrap behaviour.
     """
     limit = max(1, width - 1)
-    if len(line) <= limit:
+    if _display_width(line) <= limit:
         return line
-    return line[: max(0, limit - 1)] + "…"
+    ellipsis_width = _display_width("…")
+    target = max(0, limit - ellipsis_width)
+    cells = 0
+    chars: list[str] = []
+    for char in line:
+        char_width = wcwidth(char) if wcwidth is not None else 1
+        if char_width < 0:
+            char_width = 0
+        if cells + char_width > target:
+            break
+        chars.append(char)
+        cells += char_width
+    return "".join(chars) + "…"
 
 
 def _wrap_picker_text(text: str, width: int, prefix: str) -> list[str]:
@@ -364,9 +390,7 @@ def _draw(lines: list[str], prev_count: int) -> None:
     """Redraw the picker, clearing previous output first."""
     if prev_count > 0:
         sys.stdout.write(f"\033[{prev_count}A")
-        for _ in range(prev_count):
-            sys.stdout.write("\033[2K\n")
-        sys.stdout.write(f"\033[{prev_count}A")
+        sys.stdout.write("\033[J")
     for line in lines:
         sys.stdout.write(line + "\n")
     sys.stdout.flush()
@@ -679,6 +703,7 @@ def _prompt_toolkit_pick(
     editable_state: Optional[dict[str, str]] = None,
     editable_placeholder: str = "Type here",
     command_buffer_state: Optional[QuestionCommandBuffer] = None,
+    allow_back_navigation: bool = False,
 ) -> Optional[list[int] | str]:
     """Run a simple picker that cooperates with prompt_toolkit REPL sessions."""
     cursor = 0

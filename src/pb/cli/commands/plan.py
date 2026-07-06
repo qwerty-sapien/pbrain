@@ -30,9 +30,9 @@ from pb.cli.helpers import (
     prompt_text,
     select_from_numbered_list,
 )
-from pb.cli.pickers import pick_many_choices, pick_single_choice
+from pb.cli.pickers import PickerResult, pick_many_choices, pick_single_choice
 from pb.cli.task_scoring import score_task_interactively, task_missing_planning_scores
-from pb.core.goal_roadmaps import ensure_goal_seed_tasks
+from pb.core.goal_roadmaps import ensure_goal_seed_tasks, project_title_for_goal
 from pb.core.intake import create_task
 from pb.core.learning_tasks import ensure_time_block, materialize_learning_task
 from pb.core.models import Task
@@ -213,18 +213,170 @@ def _archive_active_todos(repo: Repository) -> int:
     return len(todos)
 
 
+def _goal_project_tasks(repo: Repository, goal_id: str) -> list[Task]:
+    return [
+        task
+        for task in _active_plan_candidates(repo)
+        if goal_id in (getattr(task, "linked_goal_arc_ids", []) or [])
+    ]
+
+
+def _open_paused_task_ids(repo: Repository) -> set[str]:
+    try:
+        return {str(row["task_id"]) for row in repo.list_open_pause_intervals(limit=20)}
+    except Exception:
+        return set()
+
+
+def _pick_or_create_day_plan_project(ctx: typer.Context, repo: Repository, consultation: DayPlanConsultation):
+    goals = [goal for goal in repo.list_goal_arcs(status=None) if getattr(goal, "status", "active") == "active"]
+    if not goals:
+        selected = pick_single_choice(
+            [
+                ("create", "Create a learning project"),
+                ("custom", "Discuss/custom project"),
+            ],
+            title="Plan project",
+            text="No active project exists yet. Shape one before drafting today.",
+            allow_inline_edit=True,
+            inline_prompt="Describe the project",
+            return_result=True,
+        )
+        raw_goal = ""
+        if isinstance(selected, PickerResult):
+            if selected.kind == "inline_text":
+                raw_goal = str(selected.value or "").strip()
+            elif selected.kind == "selection" and selected.value in {"create", "custom"}:
+                raw_goal = prompt_text("New project", default="").strip()
+        elif selected in {"create", "custom"}:
+            raw_goal = prompt_text("New project", default="").strip()
+        if not raw_goal:
+            return None
+        from pb.cli.commands.goals import _create_goal_via_llm
+
+        goal = _create_goal_via_llm(ctx, raw_goal, yes=False)
+        if goal is not None:
+            consultation.created_goal_titles.append(goal.title)
+            ensure_goal_seed_tasks(repo, [goal], vault_path=ctx.obj["runtime"].vault_path)
+        return goal
+
+    paused_ids = _open_paused_task_ids(repo)
+    options = []
+    details = []
+    for goal in goals:
+        tasks = _goal_project_tasks(repo, goal.id)
+        paused_count = sum(1 for task in tasks if task.id in paused_ids)
+        title = project_title_for_goal(goal)
+        label = f"{title} ({len(tasks)} task{'s' if len(tasks) != 1 else ''})"
+        if paused_count:
+            label += f" · {paused_count} paused"
+        options.append((goal.id, label))
+        details.append(
+            "\n".join(
+                [
+                    f"Goal: {goal.title}",
+                    f"Domain: {goal.domain or '-'}",
+                    f"Success: {goal.success_definition or '-'}",
+                ]
+            )
+        )
+    selected_id = pick_single_choice(
+        options,
+        title="Plan project",
+        text="Choose the long-running project today's work should advance.",
+        details=details,
+        allow_inline_edit=True,
+        inline_prompt="Discuss/custom project focus",
+        return_result=True,
+    )
+    if isinstance(selected_id, PickerResult):
+        if selected_id.kind == "inline_text":
+            consultation.priority_note = str(selected_id.value or "").strip()
+            return None
+        if selected_id.kind != "selection":
+            return None
+        selected_id = str(selected_id.value or "")
+    return next((goal for goal in goals if goal.id == selected_id), None)
+
+
+def _pick_day_plan_project_scope(ctx: typer.Context, repo: Repository, consultation: DayPlanConsultation) -> None:
+    goal = _pick_or_create_day_plan_project(ctx, repo, consultation)
+    if goal is None:
+        return
+    tasks = _goal_project_tasks(repo, goal.id)
+    if not tasks:
+        ensure_goal_seed_tasks(repo, [goal], vault_path=ctx.obj["runtime"].vault_path)
+        tasks = _goal_project_tasks(repo, goal.id)
+    paused_ids = _open_paused_task_ids(repo)
+    paused_tasks = [task for task in tasks if task.id in paused_ids]
+    todo_tasks = [
+        task for task in tasks
+        if (getattr(task, "work_type", "") or "").lower() == "todo" or getattr(task, "due_date", None)
+    ]
+    frontier_tasks = [
+        task for task in tasks
+        if task.id not in {item.id for item in paused_tasks}
+        and task.id not in {item.id for item in todo_tasks}
+    ]
+    focus_options = [
+        ("frontier", f"Frontier work ({len(frontier_tasks) or len(tasks)} task(s))"),
+        ("paused", f"Paused/resume work ({len(paused_tasks)} task(s))"),
+        ("todo", f"Due/todo work ({len(todo_tasks)} task(s))"),
+        ("project", "Whole project"),
+    ]
+    focus_details = [
+        "Move the roadmap frontier forward without flooding today's plan.",
+        "Resume a paused session or the nearest interrupted task.",
+        "Use the project context but prioritize due items and todos.",
+        "Let the LLM choose the best coarse slice from this project.",
+    ]
+    selected_focus = pick_single_choice(
+        focus_options,
+        title="Project focus",
+        text="Choose the coarse slice today's plan should use.",
+        details=focus_details,
+        allow_inline_edit=True,
+        inline_prompt="Discuss/custom focus",
+        return_result=True,
+    )
+    custom_focus = ""
+    if isinstance(selected_focus, PickerResult):
+        if selected_focus.kind == "inline_text":
+            custom_focus = str(selected_focus.value or "").strip()
+            selected_focus = "project"
+        elif selected_focus.kind != "selection":
+            return
+        else:
+            selected_focus = str(selected_focus.value or "")
+    selected_focus = str(selected_focus or "project")
+    if selected_focus == "paused" and paused_tasks:
+        selected = paused_tasks
+    elif selected_focus == "todo" and todo_tasks:
+        selected = todo_tasks
+    elif selected_focus == "frontier" and frontier_tasks:
+        selected = frontier_tasks
+    else:
+        selected = tasks
+    consultation.selected_task_ids = [task.id for task in selected[:8]]
+    focus_label = custom_focus or selected_focus.replace("_", " ")
+    consultation.priority_note = (
+        f"Project: {project_title_for_goal(goal)}. Coarse focus: {focus_label}. "
+        "Plan toward finishing the project through one or more concrete sessions."
+    )
+
+
 def _consult_day_plan(ctx: typer.Context, repo: Repository) -> DayPlanConsultation:
     consultation = DayPlanConsultation()
     if not sys.stdin.isatty():
         return consultation
 
-    consultation.selected_task_ids = _pick_day_plan_tasks(repo)
+    _pick_day_plan_project_scope(ctx, repo, consultation)
 
     while True:
         action = pick_single_choice(
             [
                 ("continue", "Continue to draft"),
-                ("pick_tasks", "Re-pick tasks"),
+                ("pick_tasks", "Re-pick project/focus"),
                 ("add_task", "Add goal-linked task"),
                 ("add_todo", "Add ad-hoc todo"),
                 ("clear_todo", "Clear todo list"),
@@ -236,10 +388,7 @@ def _consult_day_plan(ctx: typer.Context, repo: Repository) -> DayPlanConsultati
         if action in {None, "continue"}:
             break
         if action == "pick_tasks":
-            consultation.selected_task_ids = _pick_day_plan_tasks(
-                repo,
-                preselected_ids=consultation.selected_task_ids,
-            )
+            _pick_day_plan_project_scope(ctx, repo, consultation)
             continue
         if action == "add_task":
             task = _create_goal_linked_task(ctx, repo)
@@ -508,7 +657,8 @@ def _plan_day_prompt(
         pending_anki = get_pending_card_count()
     except Exception:
         pending_anki = 0
-    active_tasks = _active_plan_candidates(repo)
+    selected_tasks = _selected_consultation_tasks(repo, consultation)
+    active_tasks = selected_tasks or _active_plan_candidates(repo)
     task_lines = [
         f"- {task.title} | goal={_task_goal_label(repo, task)} | type={getattr(task, 'work_type', '') or 'task'} | est={getattr(task, 'estimated_minutes', None) or '-'}"
         for task in active_tasks[:12]
@@ -529,8 +679,8 @@ def _plan_day_prompt(
         f"Accepted/edited Anki candidates awaiting export: {pending_anki}\n\n"
         "Active goals:\n"
         f"{chr(10).join(goal_lines) or '- none'}\n\n"
-        "Active tasks and todos:\n"
-        f"{chr(10).join(task_lines) or '- none'}\n\n"
+        + ("Selected project tasks:\n" if selected_tasks else "Active tasks and todos:\n")
+        + f"{chr(10).join(task_lines) or '- none'}\n\n"
         "Planning consultation:\n"
         f"{consultation_text or '- none'}\n\n"
         "Recent sessions:\n"

@@ -289,6 +289,21 @@ class ActionReminder(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class LearningTransition(BaseModel):
+    """Deferred LLM work for a learning-session closeout transition."""
+
+    id: str = Field(default_factory=generate_internal_id)
+    route_kind: str
+    source_session_id: str
+    source_task_id: str
+    status: str = "pending"
+    payload_json: dict[str, object] = Field(default_factory=dict)
+    attempt_count: int = 0
+    last_error: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class GenerationProvenance(BaseModel):
     """Minimal audit record for LLM-generated artifacts."""
 

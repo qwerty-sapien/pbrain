@@ -961,6 +961,14 @@ def main(
             except Exception:
                 pass  # Non-fatal: Anki availability must never block pb startup.
 
+            if sys.stdin.isatty():
+                try:
+                    from pb.cli.learning_transition_flow import process_pending_learning_transitions
+
+                    process_pending_learning_transitions(ctx, interactive=True)
+                except Exception:
+                    pass  # Non-fatal: deferred closeout work must never block startup.
+
     # Phase 23: Check for expired timer before executing any command (D-13/D-14)
         try:
             _check_timer_expiry(ctx)

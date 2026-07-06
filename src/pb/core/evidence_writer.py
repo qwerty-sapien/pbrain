@@ -25,7 +25,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from string import Template
 from typing import Optional, TYPE_CHECKING
 
 import structlog
@@ -34,8 +33,7 @@ import yaml
 from pb.core.durations import elapsed_minutes_and_label
 from pb.core.graph_writer import make_slug
 from pb.core.learning_metadata import parse_learning_task_metadata
-from pb.core.resources import read_template_text, template_exists
-from pb.core.session_activity import format_learning_partner_activity_markdown
+from pb.core.renderables import renderable_markdown_text
 from pb.core.session_blueprints import blueprint_from_payload
 
 if TYPE_CHECKING:
@@ -96,7 +94,7 @@ class EvidenceWriter:
             duration_min, duration_display = elapsed_minutes_and_label(session.start_at, session.end_at)
 
             frontmatter = self._build_frontmatter(session, task, assessment, domain, date_str, duration_min)
-            body = self._render_body(session, task, assessment, domain, date_str, duration_min, duration_display)
+            body = self._render_body(session, task, assessment, domain, date_str, duration_display)
 
             # T-02-03: yaml.safe_dump only -- never yaml.dump
             content = "---\n" + yaml.safe_dump(frontmatter, allow_unicode=True, default_flow_style=False) + "---\n\n" + body
@@ -151,21 +149,31 @@ class EvidenceWriter:
         return fm
 
     @staticmethod
-    def _first_nonempty(*values: object, default: str = "_Not recorded_") -> str:
-        for value in values:
-            if value is None:
-                continue
-            text = str(value).strip()
-            if text:
-                return text
-        return default
+    def _clean_visible_text(value: object) -> str:
+        text = renderable_markdown_text(str(value or "")).strip()
+        text = text.strip()
+        lowered = text.strip(" _-*`").lower()
+        if lowered in {"", "none", "no", "n/a", "na", "not recorded", "nothing"}:
+            return ""
+        if lowered.startswith("no concrete ") or lowered.startswith("nothing explicit "):
+            return ""
+        return text
+
+    @classmethod
+    def _append_unique(cls, items: list[str], value: object) -> None:
+        text = cls._clean_visible_text(value)
+        if not text:
+            return
+        key = text.lower()
+        if key not in {item.lower() for item in items}:
+            items.append(text)
 
     @staticmethod
-    def _field_text(value: object, default: str = "_Not recorded_") -> str:
-        if value is None:
-            return default
-        text = str(value).strip()
-        return text or default
+    def _bullet_section(title: str, lines: list[str]) -> str:
+        clean = [line.strip() for line in lines if line.strip()]
+        if not clean:
+            return ""
+        return f"## {title}\n" + "\n".join(f"- {line}" for line in clean)
 
     @staticmethod
     def _finish_checkin_section(session) -> str:
@@ -221,165 +229,90 @@ class EvidenceWriter:
             deduped.append(item)
         return deduped
 
-    def _render_body(self, session, task, assessment, domain, date_str, duration_min, duration_display) -> str:
-        """Render Markdown body via string.Template.safe_substitute()."""
-        from pb.core.domain_templates import get_template
-        template_def = get_template(domain, branch=getattr(session, "branch", "") or "study", session=session, task=task)
-        meta = parse_learning_task_metadata(task)
+    def _render_body(self, session, task, assessment, domain, date_str, duration_display) -> str:
+        """Render the compact learner-facing finish evidence body."""
         generated_names = getattr(session, "generated_names", {}) or {}
-        blueprint = blueprint_from_payload(
-            generated_names.get("session_blueprint") if isinstance(generated_names.get("session_blueprint"), dict) else meta.session_blueprint
-        )
-        template_name = template_def.markdown_template_file
-        if not template_exists(template_name):
-            template_name = "evidence_generic.md"
-
-        template = Template(read_template_text(template_name))
-
-        # Build sub-skills section
         actual_outcome = str(getattr(session, "actual_outcome", "") or "").strip()
         observed_errors = str(getattr(session, "observed_errors", "") or "").strip()
         next_adjustment = str(getattr(session, "next_adjustment", "") or "").strip()
-        sub_skills_section = "_No assessment signals captured._"
-        critique = "AI assessment was skipped, so this note uses lightweight session signals instead."
         retry_items = self._retry_items(session, assessment)
-        retry_items_section = "\n".join(f"- [ ] {item}" for item in retry_items) if retry_items else "_None_"
-        weak_skill_names = ""
 
-        if assessment is not None:
-            lines = []
-            for ss in getattr(assessment, "sub_skill_scores", []):
-                weak_marker = " -- weak" if ss.is_weak else ""
-                lines.append(f"- {ss.name} (score: {ss.score}/5{weak_marker})")
-            sub_skills_section = "\n".join(lines) if lines else "_No sub-skills assessed_"
-            critique = getattr(assessment, "critique", "_No critique_") or "_No critique_"
-            weak_skill_names = ", ".join(
-                ss.name for ss in getattr(assessment, "sub_skill_scores", []) if getattr(ss, "is_weak", False)
-            ).strip()
+        scope = self._clean_visible_text(getattr(session, "subject_scope", None)) or self._clean_visible_text(getattr(task, "title", None))
+        intended = self._clean_visible_text(getattr(session, "expectation", None)) or self._clean_visible_text(getattr(session, "intended_outcome", None))
+
+        proficient: list[str] = []
+        mistakes: list[str] = []
+        related: list[str] = []
+        scores = list(getattr(assessment, "sub_skill_scores", []) if assessment is not None else [])
+        for ss in scores:
+            target = self._clean_visible_text(getattr(ss, "name", ""))
+            if not target:
+                continue
+            if getattr(ss, "score", 0) >= 4 and not getattr(ss, "is_weak", False):
+                self._append_unique(proficient, f"{target} ({getattr(ss, 'score', 0)}/5)")
+            else:
+                self._append_unique(mistakes, f"{target} ({getattr(ss, 'score', 0)}/5)")
+        self._append_unique(proficient, actual_outcome if actual_outcome.lower() not in {"done", "q", "quit", "exit"} else scope)
+        self._append_unique(mistakes, observed_errors)
+        for item in retry_items:
+            self._append_unique(mistakes, item)
+
+        compact = generated_names.get("learning_partner_compact")
+        if isinstance(compact, dict):
+            for key in ("detected_gaps", "unknowns"):
+                for item in compact.get(key, []) or []:
+                    self._append_unique(mistakes, item)
+            for item in compact.get("corrections", []) or []:
+                self._append_unique(proficient, item)
+            for key in ("connections", "related_topics", "interrelated_topics"):
+                for item in compact.get(key, []) or []:
+                    self._append_unique(related, item)
+
+        learnt: list[str] = []
+        if mistakes and next_adjustment:
+            self._append_unique(learnt, f"Corrected focus: {mistakes[0]}; next adjustment is {next_adjustment}.")
+        elif mistakes:
+            self._append_unique(learnt, f"Identified the unstable point: {mistakes[0]}.")
+        self._append_unique(learnt, actual_outcome if actual_outcome.lower() not in {"done", "q", "quit", "exit"} else "")
+        if not learnt:
+            self._append_unique(learnt, f"Stabilised the current work on {scope or domain}.")
+
+        proficiency_lines: list[str] = []
+        if scores:
+            average = sum(int(getattr(ss, "score", 0) or 0) for ss in scores) / max(1, len(scores))
+            proficiency_lines.append(f"Overall: {average:.1f}/5 across {len(scores)} assessed area(s).")
+            if mistakes:
+                proficiency_lines.append("Proficient with corrections needed.")
+            else:
+                proficiency_lines.append("Proficient on the captured evidence.")
         else:
-            signal_lines = []
-            if actual_outcome:
-                signal_lines.append(f"- Progress signal: {actual_outcome}")
-            if observed_errors:
-                signal_lines.append(f"- Shaky area: {observed_errors}")
-            if next_adjustment:
-                signal_lines.append(f"- Retry focus: {next_adjustment}")
-            if signal_lines:
-                sub_skills_section = "\n".join(signal_lines)
-
-        what_you_learned = self._first_nonempty(
-            actual_outcome,
-            getattr(session, "intended_outcome", None),
-            getattr(task, "title", None),
-        )
-        what_is_shaky = self._first_nonempty(
-            observed_errors,
-            weak_skill_names,
-            default="_Nothing explicit was captured._",
-        )
-        what_to_do_next = self._first_nonempty(
-            next_adjustment,
-            retry_items[0] if retry_items else None,
-            default="_No concrete next step was captured._",
-        )
-
-        body = template.safe_substitute(
-            title=task.title,
-            date=date_str,
-            domain=domain,
-            duration_min=str(duration_min),
-            duration_display=duration_display,
-            sub_skills_section=sub_skills_section,
-            critique=critique,
-            retry_items_section=retry_items_section,
-            # Generic fields are populated from session/task signal when available.
-            session_goal=self._first_nonempty(
-                getattr(session, "expectation", None),
-                getattr(session, "intended_outcome", None),
-                getattr(task, "title", None),
-            ),
-            what_practiced=self._first_nonempty(
-                getattr(session, "subject_scope", None),
-                getattr(task, "title", None),
-                getattr(session, "actual_outcome", None),
-            ),
-            difficulties=self._field_text(getattr(session, "observed_errors", None)),
-            self_assessment=self._first_nonempty(
-                getattr(session, "actual_outcome", None),
-                getattr(session, "next_adjustment", None),
-            ),
-            what_you_learned=what_you_learned,
-            what_is_shaky=what_is_shaky,
-            what_to_do_next=what_to_do_next,
-            problem_set=self._first_nonempty(
-                getattr(session, "subject_scope", None),
-                getattr(task, "title", None),
-            ),
-            mistakes_log=self._field_text(getattr(session, "observed_errors", None)),
-            concepts_applied=self._first_nonempty(
-                getattr(session, "actual_outcome", None),
-                getattr(session, "subject_scope", None),
-                getattr(task, "title", None),
-            ),
-            compiler_errors=self._field_text(getattr(session, "observed_errors", None)),
-            phrases_attempted=self._first_nonempty(
-                getattr(session, "actual_outcome", None),
-                getattr(session, "subject_scope", None),
-                getattr(task, "title", None),
-            ),
-            corrections=self._first_nonempty(
-                getattr(session, "observed_errors", None),
-                getattr(session, "next_adjustment", None),
-            ),
-        )
-
-        extras: list[str] = []
-        if blueprint is not None:
-            extras.append(
-                "## Session Blueprint\n"
-                f"- Skill kind: {blueprint.skill_kind.value}\n"
-                f"- Primary frame: {blueprint.primary_frame.value}\n"
-                f"- Subskills: {', '.join(blueprint.subskills) or '_None_'}"
+            proficiency_lines.append(
+                "Assessment was lightweight: proficiency is inferred from the session note because AI assessment was skipped."
             )
-            evidence_items = generated_names.get("learning_partner_evidence")
-            if isinstance(evidence_items, list) and evidence_items:
-                lines: list[str] = []
-                for item in evidence_items:
-                    if not isinstance(item, dict):
-                        continue
-                    subskill = str(item.get("subskill", "")).strip()
-                    note = str(item.get("note", "") or item.get("evidence", "") or "").strip()
-                    if not note:
-                        continue
-                    prefix = f"{subskill}: " if subskill else ""
-                    lines.append(f"- {prefix}{note}")
-                if lines:
-                    extras.append("## Evidence Observed\n" + "\n".join(lines))
-        activity_section = format_learning_partner_activity_markdown(generated_names, limit=80)
-        if activity_section:
-            extras.append(activity_section.rstrip())
-        if template_def.name != "_generic":
-            summary_lines = []
-            if actual_outcome:
-                summary_lines.append(f"- Outcome: {actual_outcome}")
-            if observed_errors:
-                summary_lines.append(f"- Observed errors: {observed_errors}")
-            if summary_lines:
-                extras.append("## Session Summary\n" + "\n".join(summary_lines))
-            extras.extend(
-                [
-                    "## What You Learned\n" + what_you_learned,
-                    "## What Is Still Shaky\n" + what_is_shaky,
-                    "## What To Do Next\n" + what_to_do_next,
-                ]
-            )
+
+        body_sections = [
+            f"# Evidence: {renderable_markdown_text(task.title)} -- {date_str}",
+            f"**Domain:** {renderable_markdown_text(domain)}",
+            f"**Duration:** {duration_display}",
+        ]
+        if intended:
+            body_sections.append(self._bullet_section("Session Goal", [intended]))
+        practised_lines = []
+        if scope:
+            practised_lines.append(f"Scope: {scope}")
+        practised_lines.extend(f"Proved proficient in: {item}" for item in proficient[:4])
+        practised_lines.extend(f"Mistake corrected: {item}" for item in mistakes[:4])
+        body_sections.append(self._bullet_section("What Was Practised", practised_lines))
+        body_sections.append(self._bullet_section("What You Learnt", learnt[:5]))
+        body_sections.append(self._bullet_section("Assessment of Proficiency", proficiency_lines))
+        if related:
+            body_sections.append(self._bullet_section("Interrelated Topics", related[:6]))
+
+        body = "\n\n".join(section for section in body_sections if section.strip()) + "\n"
 
         finish_checkin = self._finish_checkin_section(session)
         if finish_checkin:
-            extras.append(finish_checkin)
-
-        if extras:
-            body = body.rstrip() + "\n\n" + "\n\n".join(extras) + "\n"
+            body = body.rstrip() + "\n\n" + finish_checkin + "\n"
         return body
 
 

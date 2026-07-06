@@ -2000,7 +2000,7 @@ class LessonEngine:
             best = max((_answer_similarity(raw_answer, item) for item in question.answer_json.get("correct_choices", []) or []), default=0.0)
             if best >= 0.85:
                 return LessonEvaluationDraft(result="close", feedback="Close, but not quite the intended option.", hint=self._hint_for(question), confidence=0.65)
-            return LessonEvaluationDraft(result="wrong", feedback="That option misses the main discrimination.", hint=self._hint_for(question), confidence=0.9)
+            return LessonEvaluationDraft(result="wrong", feedback="Not quite.", hint=self._hint_for(question), confidence=0.9)
 
         if question.question_type == "multi_select":
             stats = _multi_select_stats(question, raw_answer)

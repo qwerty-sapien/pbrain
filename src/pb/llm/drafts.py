@@ -183,6 +183,34 @@ class MixedPlanDraft(BaseModel):
     blocks: list[LearningPlanBlockDraft]
 
 
+class LearningTransitionOptionDraft(BaseModel):
+    """One learner-facing closeout routing option."""
+
+    key: str
+    label: str
+    description: str = ""
+    instruction: str = ""
+
+
+class AgentSpawnProposalDraft(BaseModel):
+    """Succinct proposal for shifting the shell into a niche learning agent."""
+
+    domain: str = ""
+    title: str = ""
+    rationale: str = ""
+    context_summary: str = ""
+
+
+class LearningTransitionDraft(BaseModel):
+    """LLM-generated routing plan after a cleared learning session."""
+
+    summary: str = ""
+    options: list[LearningTransitionOptionDraft] = Field(default_factory=list)
+    continuation_options: list[LearningTransitionOptionDraft] = Field(default_factory=list)
+    next_session: Optional[LearningPlanBlockDraft] = None
+    agent_spawn: Optional[AgentSpawnProposalDraft] = None
+
+
 class CurriculumPlanDraft(BaseModel):
     """A clarified multi-step learning plan with linked dependencies."""
 

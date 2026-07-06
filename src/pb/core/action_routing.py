@@ -142,6 +142,8 @@ def _semantic_action_for_command(command: str) -> str:
         return "pause_session"
     if normalized.startswith("next --reminder "):
         return "open_reminder"
+    if normalized.startswith("next --transition "):
+        return "open_learning_transition"
     if normalized.startswith("anki export"):
         return "export_recall"
     if normalized.startswith("anki list"):
@@ -176,6 +178,8 @@ def _human_label_for_command(command: str) -> str:
         return "Pause the current session"
     if lowered.startswith("next --reminder "):
         return "Handle the pending reminder"
+    if lowered.startswith("next --transition "):
+        return "Resume the queued learning transition"
     if lowered == "goal":
         return "Clarify your learning goal"
     if lowered.startswith("plan day"):
@@ -595,6 +599,54 @@ def build_next_candidates(repo, *, limit: int = 5) -> list[CommandCandidate]:
             short_reason="Keep the session state, but get out cleanly.",
             semantic_action="pause_session",
         )
+
+    try:
+        pending_transition = repo.list_pending_learning_transitions(limit=1)
+    except Exception:
+        pending_transition = []
+    if not isinstance(pending_transition, (list, tuple)):
+        pending_transition = []
+    if pending_transition:
+        transition = pending_transition[0]
+        task = repo.get_task(transition.source_task_id)
+        label = getattr(task, "title", "") or "queued learning transition"
+        _add_candidate(
+            candidates,
+            f"next --transition {transition.id}",
+            f"Complete the queued LLM transition for {label}.",
+            0.975,
+            "learning_transition",
+            human_label=f"Continue queued transition: {label}",
+            short_reason="A prior finish completed mechanically while waiting for LLM routing.",
+            semantic_action="open_learning_transition",
+        )
+
+    if active_session is None:
+        try:
+            open_pauses = repo.list_open_pause_intervals(limit=1)
+        except Exception:
+            open_pauses = []
+        if not isinstance(open_pauses, (list, tuple)):
+            open_pauses = []
+        if open_pauses:
+            paused = open_pauses[0]
+            task = repo.get_task(paused["task_id"])
+            completion = getattr(task, "completion", 0) if task is not None else 0
+            try:
+                incomplete = float(completion) < 100
+            except (TypeError, ValueError):
+                incomplete = False
+            if task is not None and incomplete and getattr(task, "archived_at", None) is None:
+                _add_candidate(
+                    candidates,
+                    f"resume {display_ref(task, 'task')}",
+                    f"Resume the paused session for {task.title}.",
+                    0.965,
+                    "paused_session",
+                    human_label=f"Resume paused: {task.title}",
+                    short_reason="You paused this learning session and can continue it now.",
+                    semantic_action="resume_task",
+                )
 
     for reminder in repo.list_due_action_reminders(now)[:2]:
         _add_candidate(

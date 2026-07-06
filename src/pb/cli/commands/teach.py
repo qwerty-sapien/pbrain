@@ -332,7 +332,7 @@ def launch_teach_session(
             )
 
         concept_text = block.subject_scope or concept_text
-        requested_minutes = block.duration_minutes
+        requested_minutes = revision_feedback.requested_minutes or block.duration_minutes
         matched_goal = match_goal(repo, concept_text, allowed_modes={"mixed", "study"})
         matched_track = match_track(repo, concept_text)
         resolved_domain = (
@@ -480,7 +480,7 @@ def launch_teach_session(
         console.print("[dim]Teach session is ready. Run `pb finish <what you learned> --skip` when done.[/]")
         return
 
-    console.print("[dim]Interactive lesson starting. Use `finish` when the lesson is ready to close.[/]")
+    console.print("[dim]Interactive lesson starting. Use `/finish`, `/pause`, or `/next` when you need to steer the session.[/]")
     if sys.stdin.isatty():
         while True:
             active_session = repo.get_active_session()
@@ -515,11 +515,13 @@ def launch_teach_session(
                 console.print(f"[dim]Partner note:[/] {result.note_path.relative_to(runtime_ctx.vault_path)}")
             if result.action == "command" and result.command:
                 run_internal_command(ctx, result.command)
+                if result.follow_up_command:
+                    run_internal_command(ctx, result.follow_up_command)
                 active_session = repo.get_active_session()
                 if active_session is not None and active_session.task_id == task.id:
                     continue
                 return
-            if result.action == "finish":
+            if result.action in {"finish", "next"}:
                 # D-16-23: update confidence on teach session end
                 from pb.core.confidence_model import (
                     DELTA_TEACH_FULL_COVERAGE, DELTA_WRONG, clamp_score
@@ -538,7 +540,16 @@ def launch_teach_session(
                     _new_score = clamp_score(_prev_score + DELTA_WRONG)
                 repo.upsert_concept_confidence(_concept_id, confidence_score=_new_score)
                 from pb.cli.commands.execute import finish_task
-                finish_task(ctx, note_words=[result.summary], completion=100, debrief=False, skip=False)
+                finish_task(
+                    ctx,
+                    note_words=[result.summary],
+                    completion=100,
+                    yes=result.skip_finish_assessment,
+                    debrief=False,
+                    skip=result.skip_finish_assessment,
+                )
+                if result.follow_up_command:
+                    run_internal_command(ctx, result.follow_up_command)
                 return
             if result.action == "pause":
                 paused = ctx.obj["factory"]["session_service"]().pause_session(outcome=result.summary)

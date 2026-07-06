@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,7 @@ from pb.core.lesson_engine import (
     LessonEngine,
     lesson_finish_review_label,
 )
+from pb.core.learning_transitions import LearningTransitionService, LearningTransitionUnavailable
 from pb.core.registry import CommandHandler, CommandRegistry
 from pb.core.naming import stored_display_title
 from pb.core.renderables import renderable_cli_text
@@ -137,6 +140,8 @@ class PartnerRunResult:
     detected_gaps: list[str] = field(default_factory=list)
     next_drill: str = ""
     command: str = ""
+    follow_up_command: str = ""
+    skip_finish_assessment: bool = False
 
 
 class LearningPartnerSession:
@@ -223,6 +228,8 @@ class LearningPartnerSession:
             self._render_session_frame(current_turn)
             picker_input = self._render_question_input(current_turn)
             if picker_input is not None:
+                if isinstance(picker_input, PartnerRunResult):
+                    return picker_input
                 if isinstance(picker_input, str):
                     picker_input = RoutedInput(kind="answer", text=picker_input)
                 if picker_input.kind == "navigation":
@@ -230,7 +237,7 @@ class LearningPartnerSession:
                     continue
                 if picker_input.kind == "lesson_continue":
                     self._reset_view()
-                    current_turn = self.continue_after_clear()
+                    current_turn = self.continue_after_clear(picker_input.text)
                     continue
                 if picker_input.kind == "answer":
                     self._reset_view()
@@ -238,7 +245,9 @@ class LearningPartnerSession:
                     continue
                 if picker_input.kind == "slash_command":
                     self._reset_view()
-                    next_turn = self.run_contextual_command(picker_input.command)
+                    next_turn = self.run_contextual_command(picker_input.command, picker_input.args)
+                    if isinstance(next_turn, PartnerRunResult):
+                        return next_turn
                     if next_turn is not None:
                         current_turn = next_turn
                     continue
@@ -246,7 +255,7 @@ class LearningPartnerSession:
                     self.explain_contextual_command_error(picker_input)
                     continue
                 if picker_input.kind == "pb_command":
-                    return self._result_from_command(picker_input.text)
+                    return self._result_from_routed_command(picker_input)
                 continue
 
             try:
@@ -268,13 +277,15 @@ class LearningPartnerSession:
                 allow_nl_dispatch=False,
             )
             if decision.kind == "pb_command":
-                return self._result_from_command(decision.text)
+                return self._result_from_routed_command(decision)
             if decision.kind == "navigation":
                 self._browse(decision.argv or (decision.command,))
                 continue
             if decision.kind == "slash_command":
                 self._reset_view()
                 next_turn = self.run_contextual_command(decision.command, decision.args)
+                if isinstance(next_turn, PartnerRunResult):
+                    return next_turn
                 if next_turn is not None:
                     current_turn = next_turn
                 continue
@@ -302,11 +313,11 @@ class LearningPartnerSession:
             self._print_activity_receipt(activity)
         return turn
 
-    def continue_after_clear(self) -> LearningPartnerTurnDraft:
+    def continue_after_clear(self, focus: str = "") -> LearningPartnerTurnDraft:
         """Continue a cleared lesson with an implications/applications page."""
 
         self._feynman_opening = ""
-        turn = self.engine.continue_after_clear()
+        turn = self.engine.continue_after_clear(focus=focus)
         self.current_turn = turn
         self._append_assistant_turn(self._assistant_log_text(turn))
         self._sync_session_metadata()
@@ -365,6 +376,9 @@ class LearningPartnerSession:
             ("/context", "Manage context lock and status from inside the lesson."),
             ("/lock", "Lock the current lesson context for future commands."),
             ("/unlock", "Unlock the currently locked context."),
+            ("/pause", "Pause the active learning session immediately."),
+            ("/finish", "Finish the active learning session immediately."),
+            ("/next", "Finish this session lightly, then run the next recommendation."),
             ("/spawn", "Spawn or revive the best domain agent for this session."),
             ("/forget", "Archive the current domain agent without deleting history."),
         ]
@@ -389,14 +403,6 @@ class LearningPartnerSession:
         if decision.kind == "slash_ambiguous" and decision.matches:
             joined = ", ".join(decision.matches)
             self.console.print(f"[warn]Ambiguous command. Matches: {joined}[/]")
-            return
-
-        head = (decision.text or "").split()[0].lower()
-        if head in {"/finish", "/pause", "/resume"}:
-            if head == "/finish":
-                self.console.print("[warn]Choose a finish option from the cleared lesson menu.[/]")
-            else:
-                self.console.print("[warn]Use `pause` or `resume` without a slash.[/]")
             return
 
         available = ", ".join(self.contextual_command_names())
@@ -485,8 +491,11 @@ class LearningPartnerSession:
         result = AgentLifecycleSuggester(self.repo).forget(session=self.session)
         return self._render_context_feedback([result.message])
 
-    def run_contextual_command(self, command: str, args: str = "") -> LearningPartnerTurnDraft | None:
+    def run_contextual_command(self, command: str, args: str = "") -> LearningPartnerTurnDraft | PartnerRunResult | None:
         """Execute one contextual slash command over the current lesson state."""
+        if command in {"/pause", "/finish", "/next"}:
+            return self._run_session_control_command(command, args)
+
         activity_context = self._activity_context_for_current_question()
         if command == "/hint":
             turn = self.engine.use_hint()
@@ -520,6 +529,46 @@ class LearningPartnerSession:
         else:
             return None
         return self._record_contextual_turn(turn, command=command, args=args, activity_context=activity_context)
+
+    def _run_session_control_command(self, command: str, args: str = "") -> PartnerRunResult:
+        """Return a closeout action for session-level slash commands."""
+        clean_args = renderable_cli_text(args).strip()
+        activity_context = self._activity_context_for_current_question()
+        self._record_command_activity(command=command, args=clean_args, activity_context=activity_context)
+        if command == "/pause":
+            return self._finalize("pause", clean_args or "Paused the lesson session.")
+        if command == "/finish":
+            return self._finalize("finish", clean_args or "Finished the lesson session.")
+
+        service = LearningTransitionService(self.repo, self.runtime, self.runtime_ctx)
+        try:
+            transition = service.choose_next_session(session=self.session, task=self.task)
+        except LearningTransitionUnavailable as exc:
+            queued = service.enqueue(
+                route_kind="next_session",
+                session=self.session,
+                task=self.task,
+                reason=str(exc),
+            )
+            return PartnerRunResult(
+                action="command",
+                summary=f"Finished; queued the next-session plan until the LLM is available ({queued.id}).",
+                command="finish --skip --yes",
+                skip_finish_assessment=True,
+            )
+        if transition is None:
+            return None
+        self._store_next_session_preference(transition.summary)
+        return PartnerRunResult(
+            action="command",
+            summary=transition.summary,
+            command="finish --skip --yes",
+            follow_up_command=transition.command,
+            skip_finish_assessment=True,
+            recall_candidates=list(self.collected_recall),
+            detected_gaps=list(self.collected_gaps),
+            next_drill=self.next_drill,
+        )
 
     def _record_contextual_turn(
         self,
@@ -744,7 +793,7 @@ class LearningPartnerSession:
                 rows.append(Text(line, style=style))
         return rows
 
-    def _render_question_input(self, turn: LearningPartnerTurnDraft) -> RoutedInput | None:
+    def _render_question_input(self, turn: LearningPartnerTurnDraft) -> RoutedInput | PartnerRunResult | None:
         """Collect structured answers inline when the turn calls for them."""
         question_type = getattr(turn, "question_type", "free_text")
         options = list(dict.fromkeys(str(option).strip() for option in getattr(turn, "mcq_options", []) if str(option).strip()))[:self.max_options]
@@ -761,24 +810,27 @@ class LearningPartnerSession:
             and options
             and getattr(turn, "next_action", "") == LESSON_FINISH_MENU_ACTION
         ):
-            selected = pick_single_choice(
-                [(option, renderable_cli_text(option)) for option in options],
-                title="Lesson cleared",
-                text="Choose what happens next.",
-                return_result=True,
-                slash_registry=self.command_registry,
-                pb_command_resolver=self.pb_command_resolver,
-                allow_back_navigation=True,
-            )
-            if isinstance(selected, PickerResult):
-                if selected.kind == "command" and isinstance(selected.value, RoutedInput):
-                    return selected.value
-                if selected.kind == "cancel":
+            while True:
+                selected = pick_single_choice(
+                    [(option, renderable_cli_text(option)) for option in options],
+                    title="Lesson cleared",
+                    text="Choose what happens next.",
+                    return_result=True,
+                    slash_registry=self.command_registry,
+                    pb_command_resolver=self.pb_command_resolver,
+                    allow_back_navigation=True,
+                )
+                if isinstance(selected, PickerResult):
+                    if selected.kind == "command" and isinstance(selected.value, RoutedInput):
+                        return selected.value
+                    if selected.kind == "cancel":
+                        return None
+                    selected = str(selected.value or "")
+                if not selected:
                     return None
-                selected = str(selected.value or "")
-            if not selected:
-                return None
-            return self._route_finish_menu_selection(selected)
+                routed = self._route_finish_menu_selection(selected)
+                if routed is not None:
+                    return routed
 
         if question_type == "mcq" and options:
             selected = pick_single_choice(
@@ -873,194 +925,99 @@ class LearningPartnerSession:
             )
         return None
 
-    def _route_finish_menu_selection(self, selected: str) -> RoutedInput | None:
+    def _route_finish_menu_selection(self, selected: str) -> RoutedInput | PartnerRunResult | None:
         clean = str(selected or "").strip()
         if clean == LESSON_FINISH_NEXT_SESSION:
-            return self._finish_and_start_next_input()
+            return self._finish_and_start_next_result()
         if clean == lesson_finish_review_label(self.mode):
-            return RoutedInput(
-                kind="pb_command",
-                text="finish --debrief",
-                argv=("finish", "--debrief"),
+            follow_up = "review day" if self._has_earlier_session_today() else ""
+            return PartnerRunResult(
+                action="command",
+                summary="Finished and opened today's review." if follow_up else "Finished the lesson session.",
                 command="finish",
+                follow_up_command=follow_up,
             )
         if clean == LESSON_FINISH_CONTINUE_SESSION:
-            return RoutedInput(kind="lesson_continue", text=clean, command="continue")
+            return self._continue_lesson_result()
         return RoutedInput(kind="answer", text=clean)
 
-    def _finish_and_start_next_input(self) -> RoutedInput | None:
-        preference = self._pick_next_session_direction()
-        if isinstance(preference, RoutedInput):
-            return preference
-        if preference is None:
-            return None
-        preference_text = str(preference or "").strip()
-        note = "Next session preference"
-        if preference_text:
-            note = f"{note}: {preference_text}"
-            self._store_next_session_preference(preference_text)
-        return RoutedInput(
-            kind="pb_command",
-            text="finish --skip --yes; next --run",
-            argv=("finish", "--skip", "--yes", note),
-            command="finish",
-            args="then:next --run",
-        )
-
-    def _pick_next_session_direction(self) -> str | RoutedInput | None:
-        weak_focuses = self._challenging_focus_labels()
-        weak_summary = self._summarize_focus_labels(weak_focuses)
-        application_label = (
-            "More conversational / translational"
-            if self._looks_like_language_learning()
-            else "More application-based / translational"
-        )
-        options = [
-            ("application", application_label),
-            ("weak_focus", "Focus on the weakest subtopics"),
-            ("theoretical", "More theoretical / proof-first"),
-            ("shift", "Shift to a connected topic"),
-        ]
-        details = [
-            "Push the next session toward concrete transfer and use cases.",
-            weak_summary or "Probe the concepts with the weakest evidence from this lesson.",
-            "Ask for definitions, assumptions, proofs, mechanisms, and edge cases.",
-            "Move laterally into a fresh but tightly connected direction.",
-        ]
-        selected = pick_single_choice(
-            options,
-            title="Next session direction",
-            text="Choose the kind of challenge for the next session.",
-            details=details,
-            allow_inline_edit=True,
-            inline_prompt="Type custom feedback",
-            return_result=True,
-            slash_registry=self.command_registry,
-            pb_command_resolver=self.pb_command_resolver,
-            allow_back_navigation=True,
-        )
-        if isinstance(selected, PickerResult):
-            if selected.kind == "command" and isinstance(selected.value, RoutedInput):
-                return selected.value
-            if selected.kind == "cancel":
-                return None
-            if selected.kind == "inline_text":
-                typed = str(selected.value or "").strip()
-                return typed or None
-            selected_value = str(selected.value or "").strip()
-        else:
-            selected_value = str(selected or "").strip()
-
-        if selected_value == "application":
-            return application_label
-        if selected_value == "weak_focus":
-            if len(weak_focuses) > 4:
-                return self._pick_focus_cluster(weak_focuses)
-            return weak_summary or "Focus on the weakest subtopics from this lesson."
-        if selected_value == "theoretical":
-            return "Make it more theoretical / proof-first."
-        if selected_value == "shift":
-            return "Shift to a fresh but tightly connected topic."
-        return selected_value or None
-
-    def _pick_focus_cluster(self, labels: list[str]) -> str | RoutedInput | None:
-        clusters = self._cluster_focus_labels(labels)
-        selected = pick_single_choice(
-            [(cluster, cluster) for cluster in clusters],
-            title="Focus cluster",
-            text="Too many weak directions; choose the cluster for the next session.",
-            allow_inline_edit=True,
-            inline_prompt="Type a narrower focus",
-            return_result=True,
-            slash_registry=self.command_registry,
-            pb_command_resolver=self.pb_command_resolver,
-            allow_back_navigation=True,
-        )
-        if isinstance(selected, PickerResult):
-            if selected.kind == "command" and isinstance(selected.value, RoutedInput):
-                return selected.value
-            if selected.kind == "cancel":
-                return None
-            if selected.kind == "inline_text":
-                typed = str(selected.value or "").strip()
-                return typed or None
-            cluster = str(selected.value or "").strip()
-        else:
-            cluster = str(selected or "").strip()
-        return f"Focus on {cluster}" if cluster else None
-
-    def _challenging_focus_labels(self) -> list[str]:
+    def _finish_and_start_next_result(self) -> PartnerRunResult | None:
+        service = LearningTransitionService(self.repo, self.runtime, self.runtime_ctx)
         try:
-            run = self.repo.get_lesson_run(self.session.id)
-        except Exception:
-            run = None
-        if run is None:
-            return []
-        try:
-            questions = list(self.repo.list_lesson_questions(run.id))
-        except Exception:
-            return []
-        ranked: list[str] = []
-        fallback: list[str] = []
-        for question in questions:
-            label = (
-                str(question.answer_json.get("skill_label", "") or "").strip()
-                or str(question.prompt_json.get("title", "") or "").strip()
-                or question.skill_slug.replace("_", " ").strip()
+            transition = service.choose_next_session(session=self.session, task=self.task)
+        except LearningTransitionUnavailable as exc:
+            queued = service.enqueue(
+                route_kind="next_session",
+                session=self.session,
+                task=self.task,
+                reason=str(exc),
             )
-            label = renderable_cli_text(label).strip()
-            if not label:
+            self.console.print(
+                "[warn]LLM transition queued; finishing mechanically. "
+                f"Pending transition: {queued.id}[/]"
+            )
+            return PartnerRunResult(
+                action="command",
+                summary="Finished; queued the next-session plan until the LLM is available.",
+                command="finish --skip --yes",
+                skip_finish_assessment=True,
+            )
+        if transition is None:
+            self.console.print("[dim]Next session draft rejected. Choose another finish option.[/]")
+            return None
+        self._store_next_session_preference(transition.summary)
+        return PartnerRunResult(
+            action="command",
+            summary=transition.summary,
+            command="finish --skip --yes",
+            follow_up_command=transition.command,
+            skip_finish_assessment=True,
+        )
+
+    def _continue_lesson_result(self) -> RoutedInput | PartnerRunResult | None:
+        service = LearningTransitionService(self.repo, self.runtime, self.runtime_ctx)
+        try:
+            focus, draft = service.choose_continuation_focus(session=self.session, task=self.task)
+        except LearningTransitionUnavailable as exc:
+            queued = service.enqueue(
+                route_kind="continue",
+                session=self.session,
+                task=self.task,
+                reason=str(exc),
+            )
+            self.console.print(
+                "[warn]LLM continuation queued; finishing mechanically. "
+                f"Pending transition: {queued.id}[/]"
+            )
+            return PartnerRunResult(
+                action="command",
+                summary="Finished; queued the continuation until the LLM is available.",
+                command="finish --skip --yes",
+                skip_finish_assessment=True,
+            )
+        if not focus:
+            self.console.print("[dim]Continuation cancelled. Choose another finish option.[/]")
+            return None
+        try:
+            service.maybe_offer_agent_spawn(session=self.session, task=self.task, draft=draft)
+        except Exception:
+            pass
+        return RoutedInput(kind="lesson_continue", text=focus, command="continue", args=focus)
+
+    def _has_earlier_session_today(self) -> bool:
+        now = datetime.utcnow()
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        try:
+            sessions = self.repo.list_sessions_in_range(start, end)
+        except Exception:
+            return False
+        for session in sessions:
+            if getattr(session, "id", "") == self.session.id:
                 continue
-            fallback.append(label)
-            if (
-                question.status in {"revealed", "skipped", "wrong", "close"}
-                or bool(question.retry_of_question_slug)
-                or bool(question.queued_retry)
-            ):
-                ranked.append(label)
-        return list(dict.fromkeys(ranked or fallback))
-
-    @staticmethod
-    def _summarize_focus_labels(labels: list[str]) -> str:
-        clean = [label for label in dict.fromkeys(labels) if label]
-        if not clean:
-            return ""
-        shown = clean[:4]
-        suffix = f", +{len(clean) - len(shown)} more" if len(clean) > len(shown) else ""
-        return "Focus on " + ", ".join(shown) + suffix + "."
-
-    @staticmethod
-    def _cluster_focus_labels(labels: list[str]) -> list[str]:
-        clean = [label for label in dict.fromkeys(labels) if label]
-        if len(clean) <= 4:
-            return clean
-        clusters: list[str] = []
-        for index in range(0, len(clean), 4):
-            chunk = clean[index:index + 4]
-            clusters.append(", ".join(chunk))
-        return clusters[:5]
-
-    def _looks_like_language_learning(self) -> bool:
-        text = f"{self.topic} {self.domain} {getattr(self.task, 'title', '')}".lower()
-        markers = {
-            "language",
-            "conversation",
-            "speaking",
-            "listening",
-            "vocabulary",
-            "grammar",
-            "spanish",
-            "french",
-            "german",
-            "chinese",
-            "mandarin",
-            "japanese",
-            "korean",
-            "arabic",
-            "italian",
-            "portuguese",
-        }
-        return any(marker in text for marker in markers)
+            if getattr(session, "end_at", None) is not None:
+                return True
+        return False
 
     def _store_next_session_preference(self, preference: str) -> None:
         generated = dict(getattr(self.session, "generated_names", {}) or {})
@@ -1472,21 +1429,38 @@ class LearningPartnerSession:
         except Exception:
             return None
 
-    def _result_from_command(self, command: str) -> PartnerRunResult:
+    def _result_from_routed_command(self, routed: RoutedInput) -> PartnerRunResult:
+        command = shlex.join(routed.argv) if routed.argv else routed.text
+        follow_up_command = ""
+        if routed.args.startswith("then:"):
+            follow_up_command = routed.args[len("then:"):].strip()
+        return self._result_from_command(command, follow_up_command=follow_up_command)
+
+    def _result_from_command(self, command: str, *, follow_up_command: str = "") -> PartnerRunResult:
         self._store_partner_closeout(command=command)
         return PartnerRunResult(
             action="command",
             command=command,
+            follow_up_command=follow_up_command,
             recall_candidates=list(self.collected_recall),
             detected_gaps=list(self.collected_gaps),
             next_drill=self.next_drill,
         )
 
-    def _finalize(self, action: str, summary: str) -> PartnerRunResult:
+    def _finalize(
+        self,
+        action: str,
+        summary: str,
+        *,
+        follow_up_command: str = "",
+        skip_finish_assessment: bool = False,
+    ) -> PartnerRunResult:
         self._store_partner_closeout(action=action, summary=summary)
         return PartnerRunResult(
             action=action,
             summary=summary,
+            follow_up_command=follow_up_command,
+            skip_finish_assessment=skip_finish_assessment,
             recall_candidates=list(self.collected_recall),
             detected_gaps=list(self.collected_gaps),
             next_drill=self.next_drill,

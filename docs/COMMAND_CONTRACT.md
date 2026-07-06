@@ -49,6 +49,8 @@ This is the current public CLI contract for ProductiveBrain. It is intentionally
 | `pb vault` | Manage vault profiles and inspect graph health | config or graph cache depending on subcommand |
 | `pb mcp` | Print config, status, diagnostics, and pending write confirmations | pending MCP confirmations when used |
 
+Inside interactive `study`, `practise`/`practice`, and `teach` sessions, `/pause`, `/finish`, and `/next` are immediate session controls. `/next` finishes the current learning session with lightweight evidence, then runs `pb next --run`.
+
 ## Important Options
 
 - Root `--config FILE`: run against a specific config.

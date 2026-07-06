@@ -22,7 +22,7 @@ def session_callback(ctx: typer.Context):
     if ctx.invoked_subcommand is not None:
         return
     # Default: show recent sessions
-    list_sessions_command()
+    _list_sessions(limit=10)
 
 
 @app.command("list")
@@ -30,6 +30,11 @@ def list_sessions_command(
     limit: int = typer.Option(10, "--limit", "-n", help="Number of sessions to show"),
 ):
     """List recent sessions."""
+    _list_sessions(limit=limit)
+
+
+def _list_sessions(limit: int) -> None:
+    """Render recent sessions without depending on Typer callback defaults."""
     from pb.cli.console import get_console
     from pb.storage.repository import Repository
     from datetime import datetime, timedelta

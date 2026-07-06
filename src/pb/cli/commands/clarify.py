@@ -571,14 +571,25 @@ def _launch_clarification_plan(
                 console.print(f"[dim]Partner note:[/] {result.note_path.relative_to(runtime_ctx.vault_path)}")
             if result.action == "command" and result.command:
                 run_internal_command(ctx, result.command)
+                if result.follow_up_command:
+                    run_internal_command(ctx, result.follow_up_command)
                 active_session = repo.get_active_session()
                 if active_session is not None and active_session.task_id == first_task.id:
                     continue
                 return
-            if result.action == "finish":
+            if result.action in {"finish", "next"}:
                 from pb.cli.commands.execute import finish_task
 
-                finish_task(ctx, note_words=[result.summary], completion=100, debrief=False, skip=False)
+                finish_task(
+                    ctx,
+                    note_words=[result.summary],
+                    completion=100,
+                    yes=result.skip_finish_assessment,
+                    debrief=False,
+                    skip=result.skip_finish_assessment,
+                )
+                if result.follow_up_command:
+                    run_internal_command(ctx, result.follow_up_command)
                 return
             if result.action == "pause":
                 paused = ctx.obj["factory"]["session_service"]().pause_session(outcome=result.summary)

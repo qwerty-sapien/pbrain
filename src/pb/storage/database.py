@@ -196,6 +196,21 @@ CREATE TABLE IF NOT EXISTS reminder_queue (
 CREATE INDEX IF NOT EXISTS idx_reminder_queue_status ON reminder_queue(status);
 CREATE INDEX IF NOT EXISTS idx_reminder_queue_remind_at ON reminder_queue(remind_at);
 
+CREATE TABLE IF NOT EXISTS learning_transitions (
+    id TEXT PRIMARY KEY,
+    route_kind TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    source_task_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_learning_transitions_status ON learning_transitions(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_learning_transitions_session ON learning_transitions(source_session_id);
+
 CREATE TABLE IF NOT EXISTS generation_provenance (
     id TEXT PRIMARY KEY,
     artifact_kind TEXT NOT NULL,
@@ -334,6 +349,27 @@ def _migrate_reminder_queue(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_reminder_queue_status ON reminder_queue(status);
         CREATE INDEX IF NOT EXISTS idx_reminder_queue_remind_at ON reminder_queue(remind_at);
+    """)
+    conn.commit()
+
+
+def _migrate_learning_transitions(conn: sqlite3.Connection) -> None:
+    """Create deferred learning-transition queue if not present."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS learning_transitions (
+            id TEXT PRIMARY KEY,
+            route_kind TEXT NOT NULL,
+            source_session_id TEXT NOT NULL,
+            source_task_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_learning_transitions_status ON learning_transitions(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_learning_transitions_session ON learning_transitions(source_session_id);
     """)
     conn.commit()
 
@@ -1274,6 +1310,7 @@ def init_db(path: Optional[Path] = None) -> None:
         _migrate_goal_arc_focus(conn)
         _migrate_sessions_goal_practise(conn)
         _migrate_reminder_queue(conn)
+        _migrate_learning_transitions(conn)
         _migrate_generation_provenance(conn)
         _migrate_tasks_priority(conn)
         _migrate_daily_debriefs(conn)

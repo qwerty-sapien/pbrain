@@ -27,6 +27,7 @@ SUPPORTED_FEEDBACK_KINDS = {
     "too_basic",
     "too_abstract",
     "too_applied",
+    "set_time",
     "wrong_scope",
     "needs_prerequisite",
     "custom_revision",
@@ -109,6 +110,8 @@ def _signal_family(kind: str) -> str:
         return "scope"
     if normalized in {"too_applied"}:
         return "conceptual"
+    if normalized in {"set_time"}:
+        return "set_time"
     return normalized or "custom_revision"
 
 
@@ -116,14 +119,16 @@ def _heuristic_kind(text: str) -> str:
     lowered = " ".join((text or "").lower().split())
     if any(token in lowered for token in ("more foundational", "too advanced", "work on the basics", "start earlier", "prerequisite", "dont know", "don't know", "what is ")):
         return "needs_prerequisite"
-    if any(token in lowered for token in ("too abstract", "more concrete", "give me drills", "worked example", "example first")):
+    if any(token in lowered for token in ("too abstract", "more concrete", "more application", "application-based", "give me drills", "worked example", "example first")):
         return "too_abstract"
     if any(token in lowered for token in ("too basic", "already know", "skip ahead", "move faster", "harder")):
         return "too_basic"
     if any(token in lowered for token in ("wrong scope", "not what i meant", "different topic", "focus on")):
         return "wrong_scope"
-    if any(token in lowered for token in ("too applied", "more conceptual", "less application", "theory first")):
+    if any(token in lowered for token in ("too applied", "more conceptual", "more theoretical", "theory first", "less application")):
         return "too_applied"
+    if any(token in lowered for token in ("set time", "time budget", "minutes", "minute block")):
+        return "set_time"
     if "chat" in lowered:
         return "chat"
     return "custom_revision"
@@ -383,6 +388,12 @@ class ProductControlEngine:
                 control_signal="too_basic",
             ),
             AdaptiveOption(
+                key="set_time",
+                label="Set time",
+                description="Set a new time budget; the draft will narrow or broaden scope to fit.",
+                control_signal="set_time",
+            ),
+            AdaptiveOption(
                 key="custom_revision",
                 label="Custom revision",
                 description="Type the exact change you want.",
@@ -400,7 +411,7 @@ class ProductControlEngine:
                 1,
                 AdaptiveOption(
                     key="too_abstract",
-                    label="Make this more concrete",
+                    label="Make this more application-based",
                     description="Convert abstraction into drills or worked reps.",
                     control_signal="too_abstract",
                 ),
@@ -420,7 +431,7 @@ class ProductControlEngine:
                 1,
                 AdaptiveOption(
                     key="too_abstract",
-                    label="Make this more concrete",
+                    label="Make this more application-based",
                     description="Lead with examples or concrete drills.",
                     control_signal="too_abstract",
                 ),
@@ -429,7 +440,7 @@ class ProductControlEngine:
                 2,
                 AdaptiveOption(
                     key="too_applied",
-                    label="Make this more conceptual",
+                    label="Make this more theoretical",
                     description="Pull back from application and explain the structure first.",
                     control_signal="too_applied",
                 ),
@@ -549,6 +560,19 @@ class ProductControlEngine:
                 adaptive_options=[
                     AdaptiveOption(key="concept_first", label="Concepts before applications", description="Explain the structure first.", control_signal="too_applied", is_default=True),
                     AdaptiveOption(key="custom_revision", label="Custom revision", description="Type the conceptual shift you want.", control_signal="custom_revision"),
+                ],
+            )
+        if family == "set_time":
+            return ControlDecision(
+                action="set_time",
+                reason="The learner set an explicit time budget.",
+                instruction=(
+                    "Use the requested duration exactly. If the budget is short, narrow the scope and make the syllabus succinct. "
+                    "If the budget is longer, broaden the scope only where it improves learning value and add checkpoints."
+                ),
+                adaptive_options=[
+                    AdaptiveOption(key="set_time", label="Set time", description="Choose another time budget.", control_signal="set_time", is_default=True),
+                    AdaptiveOption(key="custom_revision", label="Custom revision", description="Add another change.", control_signal="custom_revision"),
                 ],
             )
         if family == "chat":

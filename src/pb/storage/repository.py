@@ -42,6 +42,7 @@ from pb.domain.models import (
     DailyReviewResponse,
     GenerationProvenance,
     GoalArc,
+    LearningTransition,
     Packet,
     Project,
     Session,
@@ -2135,6 +2136,84 @@ class Repository:
             updated_at=_str_to_dt(row["updated_at"]),
         )
 
+    # --- Learning transition queue ---
+
+    def create_learning_transition(self, transition: LearningTransition) -> LearningTransition:
+        """Create a deferred LLM-backed learning transition."""
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO learning_transitions (
+                    id, route_kind, source_session_id, source_task_id, status,
+                    payload_json, attempt_count, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    transition.id,
+                    transition.route_kind,
+                    transition.source_session_id,
+                    transition.source_task_id,
+                    transition.status,
+                    _serialize_dict(transition.payload_json),
+                    transition.attempt_count,
+                    transition.last_error,
+                    _dt_to_str(transition.created_at),
+                    _dt_to_str(transition.updated_at),
+                ),
+            )
+            conn.commit()
+        return transition
+
+    def list_pending_learning_transitions(self, limit: int = 5) -> list[LearningTransition]:
+        """Return pending learning closeout transitions, oldest first."""
+        with get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM learning_transitions
+                WHERE status = 'pending'
+                ORDER BY created_at
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [self._row_to_learning_transition(row) for row in rows]
+
+    def mark_learning_transition_completed(self, transition_id: str) -> None:
+        """Mark a deferred learning transition as completed."""
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE learning_transitions SET status = 'completed', updated_at = ? WHERE id = ?",
+                (_dt_to_str(datetime.utcnow()), transition_id),
+            )
+            conn.commit()
+
+    def mark_learning_transition_failed(self, transition_id: str, error: str) -> None:
+        """Record a failed transition attempt while leaving it pending."""
+        with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE learning_transitions
+                SET attempt_count = attempt_count + 1, last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (str(error or "")[:500], _dt_to_str(datetime.utcnow()), transition_id),
+            )
+            conn.commit()
+
+    def _row_to_learning_transition(self, row) -> LearningTransition:
+        return LearningTransition(
+            id=row["id"],
+            route_kind=row["route_kind"],
+            source_session_id=row["source_session_id"],
+            source_task_id=row["source_task_id"],
+            status=row["status"],
+            payload_json=_deserialize_dict(row["payload_json"]),
+            attempt_count=int(row["attempt_count"] or 0),
+            last_error=row["last_error"] or "",
+            created_at=_str_to_dt(row["created_at"]),
+            updated_at=_str_to_dt(row["updated_at"]),
+        )
+
     # --- Daily Review Responses ---
 
     def _row_to_review_response(self, row) -> DailyReviewResponse:
@@ -2337,6 +2416,31 @@ class Repository:
             )
             return [
                 {"id": row[0], "session_id": row[1], "pause_start": row[2], "resume_at": row[3]}
+                for row in cursor.fetchall()
+            ]
+
+    def list_open_pause_intervals(self, limit: int = 5) -> list[dict]:
+        """List most recent open pause intervals with task linkage."""
+        with get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT pi.id, pi.session_id, s.task_id, pi.pause_start, pi.resume_at
+                FROM pause_intervals pi
+                JOIN sessions s ON pi.session_id = s.id
+                WHERE pi.resume_at IS NULL
+                ORDER BY pi.pause_start DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            return [
+                {
+                    "id": row[0],
+                    "session_id": row[1],
+                    "task_id": row[2],
+                    "pause_start": row[3],
+                    "resume_at": row[4],
+                }
                 for row in cursor.fetchall()
             ]
 

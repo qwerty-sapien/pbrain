@@ -45,7 +45,7 @@ from pb.core.action_routing import suggest_commands_for_intent
 from pb.core.clock import utc_now
 from pb.core.error_logging import format_logged_exception, log_error
 from pb.core.learning_metadata import parse_learning_task_metadata
-from pb.core.learning_partner import LearningPartnerSession
+from pb.core.learning_partner import LearningPartnerSession, PartnerRunResult
 from pb.core.naming import stored_short_title
 from pb.core.renderables import renderable_cli_text
 from pb.vault.indexer import (
@@ -134,6 +134,8 @@ def _render_partner_turn_chain(partner: LearningPartnerSession, turn) -> RoutedI
         picker_input = partner._render_question_input(current_turn)
         if picker_input is None:
             return
+        if isinstance(picker_input, PartnerRunResult):
+            return _partner_result_to_routed_input(picker_input)
         if isinstance(picker_input, str):
             picker_input = RoutedInput(kind="answer", text=picker_input)
         if picker_input.kind == "navigation":
@@ -141,13 +143,19 @@ def _render_partner_turn_chain(partner: LearningPartnerSession, turn) -> RoutedI
             continue
         if picker_input.kind == "lesson_continue":
             partner._reset_view()
-            current_turn = partner.continue_after_clear()
+            current_turn = partner.continue_after_clear(picker_input.text)
             continue
         if picker_input.kind == "answer":
             current_turn = partner.respond_once(picker_input.text)
             continue
         if picker_input.kind == "slash_command":
-            next_turn = partner.run_contextual_command(picker_input.command)
+            next_turn = (
+                partner.run_contextual_command(picker_input.command, picker_input.args)
+                if picker_input.args
+                else partner.run_contextual_command(picker_input.command)
+            )
+            if isinstance(next_turn, PartnerRunResult):
+                return _partner_result_to_routed_input(next_turn)
             if next_turn is not None:
                 current_turn = next_turn
             continue
@@ -156,6 +164,37 @@ def _render_partner_turn_chain(partner: LearningPartnerSession, turn) -> RoutedI
             continue
         if picker_input.kind in {"pb_command", "shell_command"}:
             return picker_input
+
+
+def _partner_result_to_routed_input(result: PartnerRunResult) -> RoutedInput | None:
+    """Convert partner session-control results into shell-dispatchable commands."""
+    summary = renderable_cli_text(result.summary).strip()
+    if result.action == "pause":
+        argv = ("pause", "--note", summary) if summary else ("pause",)
+        return RoutedInput(kind="pb_command", text=shlex.join(argv), argv=argv, command="pause")
+    if result.action == "finish":
+        argv = ("finish", summary) if summary else ("finish",)
+        return RoutedInput(kind="pb_command", text=shlex.join(argv), argv=argv, command="finish")
+    if result.action == "next":
+        argv = ("finish", "--skip", "--yes", summary) if summary else ("finish", "--skip", "--yes")
+        return RoutedInput(
+            kind="pb_command",
+            text=f"{shlex.join(argv)}; {result.follow_up_command or 'next --run'}",
+            argv=argv,
+            command="finish",
+            args=f"then:{result.follow_up_command or 'next --run'}",
+        )
+    if result.action == "command" and result.command:
+        argv = tuple(shlex.split(result.command))
+        args = f"then:{result.follow_up_command}" if result.follow_up_command else ""
+        return RoutedInput(
+            kind="pb_command",
+            text=result.command,
+            argv=argv,
+            command=argv[0] if argv else "",
+            args=args,
+        )
+    return None
 
 
 def _maybe_open_learning_session(repo, runtime: LLMRuntime, runtime_ctx, active_session) -> None:
@@ -1231,7 +1270,28 @@ def _dispatch(
         if partner is None:
             get_err_console().print("[error]No active learning context for contextual slash commands.[/]")
             return
-        next_turn = partner.run_contextual_command(decision.command)
+        next_turn = (
+            partner.run_contextual_command(decision.command, decision.args)
+            if decision.args
+            else partner.run_contextual_command(decision.command)
+        )
+        if isinstance(next_turn, PartnerRunResult):
+            routed = _partner_result_to_routed_input(next_turn)
+            if routed is not None:
+                _dispatch(
+                    list(routed.argv),
+                    click_app,
+                    vault_root,
+                    _cwd_ref,
+                    on_cd=on_cd,
+                    repo=repo,
+                    runtime=runtime,
+                    runtime_ctx=runtime_ctx,
+                    raw_input=routed.text,
+                    pb_command_resolver=resolver,
+                    routed_input=routed,
+                )
+            return
         if next_turn is not None:
             nested = _render_partner_turn_chain(partner, next_turn)
             if nested is not None:
@@ -1354,4 +1414,14 @@ def _dispatch(
     if repo is not None and runtime is not None and runtime_ctx is not None:
         active_after = _safe_get_active_session(repo)
         if active_after is not None and getattr(active_after, "id", None) != prior_active_session_id:
+            if follow_up_command and first == "finish":
+                try:
+                    from pb.core.learning_transitions import LearningTransitionService
+
+                    LearningTransitionService(repo, runtime, runtime_ctx).maybe_offer_agent_spawn(
+                        session=active_after,
+                        task=repo.get_task(active_after.task_id),
+                    )
+                except Exception:
+                    pass
             _maybe_open_learning_session(repo, runtime, runtime_ctx, active_after)

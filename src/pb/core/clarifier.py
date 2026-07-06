@@ -296,7 +296,9 @@ class ClarifierService:
         prompt = (
             language_instruction(intent, configured=_lang_cfg)
             + "You are generating a tiny clarifier batch for a learning-first CLI.\n"
-            "Ask only the questions that unlock the next executable study or practice step.\n"
+            "Ask only the questions that unlock the next executable study, teach, or practise step.\n"
+            "If Workflow scope is study, frame questions around conceptual/theoretical understanding first; do not use practice, drill, reps, or performance wording.\n"
+            "If Workflow scope is practise, frame questions around a concrete drill, rep, or performance test.\n"
             "Rules:\n"
             "- Ask 0 to 3 questions.\n"
             "- Questions must be domain-specific and grounded in the provided context.\n"
@@ -391,14 +393,14 @@ class ClarifierService:
         elif "scope:" not in " ".join(previous):
             questions.append(
                 ClarifierQuestionDraft(
-                    question=f"What expected output should the next block on {focus} produce?",
-                    reason="One concrete target is enough to keep the next block executable.",
+                    question=f"Which theoretical focus should the next study block clarify first for {focus}?",
+                    reason="One conceptual target is enough to keep the next study block executable.",
                     answer_type="short_text",
                     optional=False,
-                    option_candidates=["Explain one concept clearly", "Work one guided example", "Complete one diagnostic check"],
-                    why_this_matters="The next block should optimize for one clear output rather than a vague intention.",
+                    option_candidates=["Core definitions and notation", "Why the mechanism works", "One guided conceptual example"],
+                    why_this_matters="The next study block should build conceptual clarity before any application or performance work.",
                     inferred_signal_type="wrong_scope",
-                    downstream_effect="Anchors the next study or teaching block around one concrete outcome.",
+                    downstream_effect="Anchors the next study or teaching block around one theoretical focus.",
                     confidence=0.64,
                 )
             )

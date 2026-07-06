@@ -12,6 +12,7 @@ from typing import Any
 
 from pb.llm.drafts import GeneratedNamesDraft, NameConfidenceDraft
 from pb.llm.runtime import DraftGenerationError, LLMRuntime
+from pb.core.renderables import renderable_cli_text
 
 
 def _clean_words(text: str) -> list[str]:
@@ -29,8 +30,31 @@ def _title_case(text: str) -> str:
     return " ".join(word.capitalize() for word in _clean_words(text))
 
 
+def _ui_title(text: str) -> str:
+    cleaned = renderable_cli_text(text)
+    cleaned = re.sub(r"[$`*_]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_")
+    return cleaned
+
+
+def _compact_title(text: str, *, limit: int = 20) -> str:
+    cleaned = _ui_title(text)
+    if len(cleaned) <= limit:
+        return cleaned
+    words = _clean_words(cleaned)
+    picked: list[str] = []
+    for word in words:
+        candidate = " ".join([*picked, word])
+        if len(candidate) > limit:
+            break
+        picked.append(word)
+    if picked:
+        return " ".join(picked)
+    return cleaned[:limit].rstrip(" -_")
+
+
 def _safe_slug(text: str, *, fallback: str = "item", limit: int = 24) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", (text or "").lower()).strip("_")
+    slug = re.sub(r"[^a-z0-9]+", "_", _ui_title(text).lower()).strip("_")
     if not slug:
         return fallback
     if len(slug) <= limit:
@@ -49,9 +73,9 @@ def _safe_slug(text: str, *, fallback: str = "item", limit: int = 24) -> str:
 def deterministic_names(kind: str, raw_intent: str, context: dict[str, Any] | None = None) -> GeneratedNamesDraft:
     """Build a safe fallback naming bundle without calling the LLM."""
     context = context or {}
-    cleaned = " ".join(_clean_words(raw_intent)) or kind.replace("_", " ")
+    cleaned = _ui_title(" ".join(_clean_words(raw_intent))) or kind.replace("_", " ")
     short_words = _clean_words(cleaned)[:4]
-    short_title = _title_case(" ".join(short_words)) or _title_case(kind)
+    short_title = _compact_title(_title_case(" ".join(short_words)) or _title_case(kind))
     display_title = _sentence_case(cleaned) or _title_case(kind)
     base_slug = _safe_slug(cleaned, fallback=kind.replace("-", "_"))
     domain_hint = context.get("domain") or context.get("subject") or context.get("topic") or cleaned
@@ -132,7 +156,8 @@ class NameService:
             "You are naming and routing a learning artifact for ProductiveBrain.\n"
             "Return concise, human-readable names and lightweight routing metadata.\n"
             "Rules:\n"
-            "- short_title should fit naturally in a shell prompt and never be raw truncation.\n"
+            "- short_title must be under 20 characters, fit naturally in a shell prompt, and never be raw truncation.\n"
+            "- Prefer compact conceptual names over filenames, formulas, LaTeX, or copied prompt fragments.\n"
             "- slug and folder_name must use lowercase snake_case only.\n"
             "- folder_name should stay stable enough to group related study files later.\n"
             "- Use the raw request, goal/session context, and learner context when present.\n"
@@ -159,6 +184,11 @@ class NameService:
             generated.folder_name = fallback.folder_name
         if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", generated.slug or ""):
             generated.slug = fallback.slug
+        for field in ("display_title", "note_title", "session_title", "task_title", "plan_title", "goal_title"):
+            value = _ui_title(getattr(generated, field, ""))
+            if value:
+                setattr(generated, field, value)
+        generated.short_title = _compact_title(generated.short_title or fallback.short_title)
         if not generated.short_title.strip():
             generated.short_title = fallback.short_title
         if not generated.display_title.strip():
