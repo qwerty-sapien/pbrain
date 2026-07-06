@@ -62,10 +62,7 @@ def renderable_cli_text(value: RenderableText | str | dict[str, Any] | None) -> 
         core, _ = _unwrap_latex(item.text)
         return _latex_to_terminal(core)
     result = _rewrite_inline_latex(item.text, mode="cli")
-    # Second pass: bare math notation (no dollar signs) per D-12/D-13
-    if "$" not in result and _contains_bare_math_notation(result):
-        result = _apply_bare_math_notation(result)
-    return result
+    return _apply_bare_math_until_stable(result)
 
 
 def renderable_markdown_text(value: RenderableText | str | dict[str, Any] | None) -> str:
@@ -130,29 +127,46 @@ _SYMBOL_RENDER = {
     "gamma": "γ",
     "delta": "δ",
     "epsilon": "ε",
+    "varepsilon": "ε",
+    "zeta": "ζ",
     "eta": "η",
     "theta": "θ",
+    "vartheta": "θ",
+    "iota": "ι",
+    "kappa": "κ",
     "lambda": "λ",
     "mu": "μ",
+    "nu": "ν",
+    "xi": "ξ",
     "pi": "π",
+    "varpi": "π",
     "rho": "ρ",
+    "varrho": "ρ",
     "sigma": "σ",
+    "varsigma": "ς",
     "tau": "τ",
+    "upsilon": "υ",
     "phi": "φ",
+    "varphi": "φ",
+    "chi": "χ",
+    "psi": "ψ",
     "omega": "ω",
     "Gamma": "Γ",
     "Delta": "Δ",
     "Theta": "Θ",
     "Lambda": "Λ",
+    "Xi": "Ξ",
     "Pi": "Π",
     "Sigma": "Σ",
     "Phi": "Φ",
+    "Psi": "Ψ",
     "Omega": "Ω",
     "nabla": "∇",
     "partial": "∂",
     "infty": "∞",
     "cdot": "·",
     "times": "×",
+    "div": "÷",
     "pm": "±",
     "mp": "∓",
     "leq": "≤",
@@ -174,15 +188,25 @@ _SYMBOL_RENDER = {
     "langle": "⟨",
     "rangle": "⟩",
     "int": "∫",
+    "oint": "∮",
     "wedge": "∧",
     "in": "∈",
     "notin": "∉",
+    "nsubset": "⊄",
+    "nsubseteq": "⊈",
+    "nsupset": "⊅",
+    "nsupseteq": "⊉",
+    "nleq": "≰",
+    "nle": "≰",
+    "ngeq": "≱",
+    "nge": "≱",
     "mid": "|",
     "vert": "|",
     "lvert": "|",
     "rvert": "|",
     "forall": "∀",
     "exists": "∃",
+    "nexists": "∄",
     "subset": "⊂",
     "subseteq": "⊆",
     "supset": "⊃",
@@ -193,7 +217,43 @@ _SYMBOL_RENDER = {
     "varnothing": "∅",
     "ldots": "…",
     "cdots": "⋯",
+    "therefore": "∴",
+    "because": "∵",
+    "ell": "ℓ",
+    "hbar": "ℏ",
+    "oplus": "⊕",
+    "otimes": "⊗",
+    "lfloor": "⌊",
+    "rfloor": "⌋",
+    "lceil": "⌈",
+    "rceil": "⌉",
+    "perp": "⊥",
+    "parallel": "∥",
 }
+
+_NEGATED_SYMBOL_RENDER = (
+    ("subseteq", "⊈"),
+    ("subset", "⊄"),
+    ("supseteq", "⊉"),
+    ("supset", "⊅"),
+    ("in", "∉"),
+    ("leq", "≰"),
+    ("le", "≰"),
+    ("geq", "≱"),
+    ("ge", "≱"),
+    ("equal", "≠"),
+)
+
+_TEXT_BRACE_MACROS = (
+    "textnormal",
+    "operatorname",
+    "textrm",
+    "textbf",
+    "textit",
+    "mathrm",
+    "mbox",
+    "text",
+)
 
 _MATHBB_MAP = {
     "R": "ℝ",  # U+211D real numbers
@@ -236,6 +296,23 @@ _SUBSCRIPT_MAP = {
     "u": "ᵤ",
     "v": "ᵥ",
     "x": "ₓ",
+    "alpha": "ₐ",
+    "beta": "ᵦ",
+    "epsilon": "ₑ",
+    "varepsilon": "ₑ",
+    "gamma": "ᵧ",
+    "rho": "ᵨ",
+    "phi": "ᵩ",
+    "varphi": "ᵩ",
+    "chi": "ᵪ",
+    "α": "ₐ",
+    "β": "ᵦ",
+    "γ": "ᵧ",
+    "ε": "ₑ",
+    "ϵ": "ₑ",
+    "ρ": "ᵨ",
+    "φ": "ᵩ",
+    "χ": "ᵪ",
 }
 
 _SUPERSCRIPT_MAP = {
@@ -279,6 +356,25 @@ _SUPERSCRIPT_MAP = {
     "x": "ˣ",
     "y": "ʸ",
     "z": "ᶻ",
+    "alpha": "ᵅ",
+    "beta": "ᵝ",
+    "gamma": "ᵞ",
+    "delta": "ᵟ",
+    "epsilon": "ᵋ",
+    "varepsilon": "ᵋ",
+    "theta": "ᶿ",
+    "phi": "ᵠ",
+    "varphi": "ᵠ",
+    "chi": "ᵡ",
+    "α": "ᵅ",
+    "β": "ᵝ",
+    "γ": "ᵞ",
+    "δ": "ᵟ",
+    "ε": "ᵋ",
+    "ϵ": "ᵋ",
+    "θ": "ᶿ",
+    "φ": "ᵠ",
+    "χ": "ᵡ",
 }
 
 _MATH_ITALIC_MAP = {
@@ -352,7 +448,9 @@ def _latex_to_terminal(text: str) -> str:
     rendered = rendered.replace("\\{", "{").replace("\\}", "}")
 
     rendered = _replace_nested_macro(rendered, "frac", lambda a, b: f"({a})/({b})")
-    rendered = _replace_single_brace_macro(rendered, "sqrt", lambda inner: f"sqrt({inner})")
+    rendered = _replace_single_brace_macro(rendered, "sqrt", lambda inner: f"√({inner})")
+    rendered = _apply_text_latex_macros(rendered)
+    rendered = _apply_negated_latex_symbols(rendered)
 
     rendered = re.sub(
         r"\\mathbb\{([A-Z])\}",
@@ -368,7 +466,7 @@ def _latex_to_terminal(text: str) -> str:
     rendered = re.sub(r"\\([A-Za-z]+)", r"\1", rendered)
     rendered = re.sub(r"[ \t]+", " ", rendered)
     rendered = re.sub(r" *\n *", "\n", rendered)
-    return _italicize_math_variables(rendered.strip())
+    return _space_relation_boundaries(_apply_bare_math_until_stable(_italicize_math_variables(rendered.strip())))
 
 
 def _rewrite_inline_latex(text: str, *, mode: str) -> str:
@@ -389,7 +487,7 @@ def _rewrite_inline_latex(text: str, *, mode: str) -> str:
                 replacement = _replace_math_text(raw, mode=mode, display=True)
                 if replacement != f"\\[{raw}\\]":
                     converted_segments += 1
-                pieces.append(replacement)
+                pieces.append(_space_cli_math_replacement(source, cursor, close_at + 2, replacement, mode=mode))
                 cursor = close_at + 2
                 continue
         if source.startswith("\\(", cursor):
@@ -399,7 +497,7 @@ def _rewrite_inline_latex(text: str, *, mode: str) -> str:
                 replacement = _replace_math_text(raw, mode=mode, display=False)
                 if replacement != f"\\({raw}\\)":
                     converted_segments += 1
-                pieces.append(replacement)
+                pieces.append(_space_cli_math_replacement(source, cursor, close_at + 2, replacement, mode=mode))
                 cursor = close_at + 2
                 continue
         if source.startswith("$$", cursor):
@@ -409,7 +507,7 @@ def _rewrite_inline_latex(text: str, *, mode: str) -> str:
                 replacement = _replace_math_text(raw, mode=mode, display=True)
                 if replacement != f"$${raw}$$":
                     converted_segments += 1
-                pieces.append(replacement)
+                pieces.append(_space_cli_math_replacement(source, cursor, close_at + 2, replacement, mode=mode))
                 cursor = close_at + 2
                 continue
         if source[cursor] == "$":
@@ -419,7 +517,7 @@ def _rewrite_inline_latex(text: str, *, mode: str) -> str:
                 replacement = _replace_math_text(raw, mode=mode, display=False)
                 if replacement != f"${raw}$":
                     converted_segments += 1
-                pieces.append(replacement)
+                pieces.append(_space_cli_math_replacement(source, cursor, close_at + 1, replacement, mode=mode))
                 cursor = close_at + 1
                 continue
         pieces.append(source[cursor])
@@ -479,6 +577,20 @@ def _looks_like_inline_latex_segment(text: str) -> bool:
     return False
 
 
+def _space_cli_math_replacement(source: str, start: int, end: int, replacement: str, *, mode: str) -> str:
+    """Separate rendered inline math from adjacent prose when delimiters were tight."""
+    if mode != "cli" or not replacement:
+        return replacement
+    rendered = replacement
+    previous = source[start - 1] if start > 0 else ""
+    following = source[end] if end < len(source) else ""
+    if previous and not previous.isspace() and _is_boundary_word_char(previous):
+        rendered = " " + rendered
+    if following and not following.isspace() and _is_boundary_word_char(following):
+        rendered = rendered + " "
+    return rendered
+
+
 def _replace_nested_macro(text: str, macro: str, formatter) -> str:
     pattern = f"\\{macro}"
     rendered = text
@@ -512,6 +624,35 @@ def _replace_single_brace_macro(text: str, macro: str, formatter) -> str:
     return rendered
 
 
+def _apply_text_latex_macros(text: str) -> str:
+    """Render LaTeX text macros as plain prose instead of leaking command names."""
+    rendered = text
+    for macro in _TEXT_BRACE_MACROS:
+        pattern = f"\\{macro}"
+        cursor = 0
+        while True:
+            start = rendered.find(pattern, cursor)
+            if start < 0:
+                break
+            after_macro = start + len(pattern)
+            if after_macro < len(rendered) and rendered[after_macro].isalpha():
+                cursor = after_macro
+                continue
+            group = _read_braced_group(rendered, after_macro)
+            if group is None:
+                cursor = after_macro
+                continue
+            replacement = _format_latex_text_macro(group[0])
+            rendered = rendered[:start] + replacement + rendered[group[1] :]
+            cursor = start + len(replacement)
+    return rendered
+
+
+def _format_latex_text_macro(content: str) -> str:
+    plain = re.sub(r"\s+", " ", (content or "").strip())
+    return f" {plain} " if plain else " "
+
+
 def _read_braced_group(text: str, index: int) -> tuple[str, int] | None:
     while index < len(text) and text[index].isspace():
         index += 1
@@ -530,19 +671,67 @@ def _read_braced_group(text: str, index: int) -> tuple[str, int] | None:
     return None
 
 
+def _apply_negated_latex_symbols(text: str) -> str:
+    """Render LaTeX's prefix negation forms before plain command replacement."""
+    result = text
+    for command, symbol in _NEGATED_SYMBOL_RENDER:
+        result = re.sub(
+            rf"\\not\s*\\{command}(?=[^A-Za-z]|$)",
+            symbol,
+            result,
+        )
+    result = re.sub(r"\\not\s*=", "≠", result)
+    return result
+
+
 def _apply_script_markup(text: str) -> str:
     rendered = text
     rendered = re.sub(r"_\{([^{}]+)\}", lambda match: _script_to_unicode(match.group(1), _SUBSCRIPT_MAP, "_"), rendered)
     rendered = re.sub(r"\^\{([^{}]+)\}", lambda match: _script_to_unicode(match.group(1), _SUPERSCRIPT_MAP, "^"), rendered)
-    rendered = re.sub(r"_(?!\{)([A-Za-z0-9+\-=]{2,})", lambda match: _script_to_unicode(match.group(1), _SUBSCRIPT_MAP, "_"), rendered)
-    rendered = re.sub(r"\^(?!\{)([A-Za-z0-9+\-=]{2,})", lambda match: _script_to_unicode(match.group(1), _SUPERSCRIPT_MAP, "^"), rendered)
-    rendered = re.sub(r"_([A-Za-z0-9+\-=])", lambda match: _script_to_unicode(match.group(1), _SUBSCRIPT_MAP, "_"), rendered)
-    rendered = re.sub(r"\^([A-Za-z0-9+\-=])", lambda match: _script_to_unicode(match.group(1), _SUPERSCRIPT_MAP, "^"), rendered)
+    rendered = re.sub(rf"_(?!\{{)({_SCRIPT_TOKEN_MULTI_PATTERN})", lambda match: _script_to_unicode(match.group(1), _SUBSCRIPT_MAP, "_"), rendered)
+    rendered = re.sub(rf"\^(?!\{{)({_SCRIPT_TOKEN_MULTI_PATTERN})", lambda match: _script_to_unicode(match.group(1), _SUPERSCRIPT_MAP, "^"), rendered)
+    rendered = re.sub(rf"_({_SCRIPT_TOKEN_PATTERN})", lambda match: _script_to_unicode(match.group(1), _SUBSCRIPT_MAP, "_"), rendered)
+    rendered = re.sub(rf"\^({_SCRIPT_TOKEN_PATTERN})", lambda match: _script_to_unicode(match.group(1), _SUPERSCRIPT_MAP, "^"), rendered)
     return rendered
 
 
+_SCRIPT_TOKEN_CHARS = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789"
+    "+-="
+    "αβγδεϵζηθικλμνξοπρσςτυφχψω"
+    "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ"
+)
+_SCRIPT_TOKEN_CLASS = rf"[{re.escape(_SCRIPT_TOKEN_CHARS)}]"
+_SCRIPT_TOKEN_PATTERN = rf"{_SCRIPT_TOKEN_CLASS}+"
+_SCRIPT_TOKEN_MULTI_PATTERN = rf"{_SCRIPT_TOKEN_CLASS}{{2,}}"
+_BARE_BASE_CHARS = "".join(
+    sorted(
+        set(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            + "".join(_MATH_ITALIC_MAP.values())
+            + "".join(_MATHBB_MAP.values())
+            + "".join(_SYMBOL_RENDER.values())
+        )
+    )
+)
 _BARE_MATH_RE = re.compile(
-    r"(\\(?:[A-Za-z]+)\b|(?<![A-Za-z0-9])(?:[A-Za-z]|[RNCQZ])(?:\^\{?[A-Za-z0-9+\-=]{1,}\}?|_\{?[A-Za-z0-9+\-=]{1,}\}?))"
+    rf"(\\(?:[A-Za-z]+)\b|(?<![A-Za-z0-9])(?:[{re.escape(_BARE_BASE_CHARS)}])(?:\^{{?{_SCRIPT_TOKEN_PATTERN}}}?|_{{?{_SCRIPT_TOKEN_PATTERN}}}?))"
+)
+_SCRIPT_SUFFIX_CHARS = "".join(
+    sorted(set(_SUBSCRIPT_MAP.values()) | set(_SUPERSCRIPT_MAP.values()))
+)
+_SCRIPTED_VARIABLE_RE = re.compile(rf"(?<![A-Za-z])([A-Za-z])(?=[{re.escape(_SCRIPT_SUFFIX_CHARS)}])")
+_RELATION_BOUNDARY_SYMBOLS = frozenset(
+    "⊂⊆⊄⊈⊃⊇⊅⊉∈∉≤≥≰≱=≠≈≅<>"
+)
+_BOUNDARY_WORD_CHARS = frozenset(
+    "".join(_MATH_ITALIC_MAP.values())
+    + "".join(_MATHBB_MAP.values())
+    + "".join(_SYMBOL_RENDER.values())
+    + "".join(_SUBSCRIPT_MAP.values())
+    + "".join(_SUPERSCRIPT_MAP.values())
 )
 
 
@@ -565,6 +754,18 @@ def _apply_bare_math_notation(text: str) -> str:
     result = result.replace("\\:", " ")
     result = result.replace("\\!", "")
     result = result.replace("\\{", "{").replace("\\}", "}")
+    result = _replace_nested_macro(
+        result,
+        "frac",
+        lambda numerator, denominator: f"({_latex_to_terminal(numerator)})/({_latex_to_terminal(denominator)})",
+    )
+    result = _replace_single_brace_macro(
+        result,
+        "sqrt",
+        lambda inner: f"√({_latex_to_terminal(inner)})",
+    )
+    result = _apply_text_latex_macros(result)
+    result = _apply_negated_latex_symbols(result)
     # Handle \mathbb in bare text
     result = re.sub(
         r"\\mathbb\{([A-Z])\}",
@@ -582,10 +783,57 @@ def _apply_bare_math_notation(text: str) -> str:
         result = re.sub(rf"\\{name}(?=[^A-Za-z]|$)", symbol, result)
     # Apply superscript/subscript
     result = _apply_script_markup(result)
+    result = _SCRIPTED_VARIABLE_RE.sub(lambda match: _MATH_ITALIC_MAP.get(match.group(1), match.group(1)), result)
     result = result.replace("{", "").replace("}", "")
     result = re.sub(r"\\([A-Za-z]+)", r"\1", result)
     result = re.sub(r"[ \t]+", " ", result)
-    return result
+    return _space_relation_boundaries(result)
+
+
+def _apply_bare_math_until_stable(text: str) -> str:
+    """Apply bare math cleanup until nested/generated script notation settles."""
+    result = text or ""
+    applied = False
+    for _ in range(4):
+        if not _contains_bare_math_notation(result):
+            break
+        next_result = _apply_bare_math_notation(result)
+        applied = True
+        if next_result == result:
+            break
+        result = next_result
+    return _space_relation_boundaries(result) if applied else result
+
+
+def _space_relation_boundaries(text: str) -> str:
+    """Ensure rendered relation symbols do not fuse with adjacent text."""
+    if not text:
+        return ""
+    pieces: list[str] = []
+    length = len(text)
+    for index, char in enumerate(text):
+        previous_output = pieces[-1] if pieces else ""
+        if (
+            char in _RELATION_BOUNDARY_SYMBOLS
+            and previous_output
+            and not previous_output.isspace()
+            and _is_boundary_word_char(previous_output)
+        ):
+            pieces.append(" ")
+        pieces.append(char)
+        following = text[index + 1] if index + 1 < length else ""
+        if (
+            char in _RELATION_BOUNDARY_SYMBOLS
+            and following
+            and not following.isspace()
+            and _is_boundary_word_char(following)
+        ):
+            pieces.append(" ")
+    return "".join(pieces)
+
+
+def _is_boundary_word_char(char: str) -> bool:
+    return bool(char and (char.isalnum() or char in _BOUNDARY_WORD_CHARS))
 
 
 def _script_to_unicode(content: str, alphabet: dict[str, str], fallback_prefix: str) -> str:
@@ -594,7 +842,7 @@ def _script_to_unicode(content: str, alphabet: dict[str, str], fallback_prefix: 
         return ""
     mapped: list[str] = []
     for char in lowered:
-        substitute = alphabet.get(char.lower())
+        substitute = alphabet.get(char) or alphabet.get(char.lower())
         if substitute is None:
             return f"{fallback_prefix}({lowered})"
         mapped.append(substitute)

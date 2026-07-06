@@ -58,6 +58,30 @@ POINTS_PER_HINT = 0.5
 
 RECOGNITION_TYPES = {"mcq", "multi_select", "cloze"}
 PRODUCTION_TYPES = {"short_text", "free_production", "error_correction", "reorder"}
+LESSON_FINISH_MENU_ACTION = "lesson_finish_menu"
+LESSON_FINISH_NEXT_SESSION = "Finish and start the next session"
+LESSON_FINISH_CONTINUE_SESSION = "Continue session and explore implications/applications"
+
+
+def lesson_finish_review_label(mode: str) -> str:
+    """Return the review label for a cleared lesson menu."""
+
+    normalized = str(mode or "").strip().lower()
+    if normalized == "teach":
+        return "Finish and review lesson"
+    if normalized in {"practise", "practice"}:
+        return "Finish and review practice"
+    return "Finish and review study session"
+
+
+def lesson_finish_action_options(mode: str) -> list[str]:
+    """Return the three selectable actions shown when a lesson is cleared."""
+
+    return [
+        LESSON_FINISH_NEXT_SESSION,
+        lesson_finish_review_label(mode),
+        LESSON_FINISH_CONTINUE_SESSION,
+    ]
 
 
 def _iso_now() -> str:
@@ -156,6 +180,151 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return deduped
 
 
+_CHOICE_EXPLANATION_SPLIT_RE = re.compile(
+    r"\s*(?:[,;:]\s*)?(?:which|because|since|therefore|representing)\b"
+    r"|\s+represents\b"
+    r"|\s+is\s+because\b",
+    flags=re.IGNORECASE,
+)
+_CHOICE_LEADING_WRAPPER_RE = re.compile(
+    r"^(?:the\s+)?"
+    r"(?:(?:largest|smallest|maximum|minimum|correct|best|only)\s+)?"
+    r"(?:possible\s+)?"
+    r"(?:answer|choice|option|statement|radius|value|sets?|open\s+sets?)\s+"
+    r"(?:is|are|equals?)\s+",
+    flags=re.IGNORECASE,
+)
+
+
+def _choice_answer_surface(value: object) -> str:
+    """Return the answer-only part of a recognition choice for display."""
+
+    text = renderable_cli_text(str(value or "")).strip()
+    text = re.sub(r"^\s*(?:[-*•]\s*)?(?:\d+|[A-Za-z])[\).\]]\s+", "", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    text = _CHOICE_EXPLANATION_SPLIT_RE.split(text, maxsplit=1)[0].strip()
+    text = _CHOICE_LEADING_WRAPPER_RE.sub("", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > 1 and text.endswith("."):
+        text = text[:-1].rstrip()
+    return text
+
+
+def _choice_equivalence_key(value: object) -> str:
+    surface = _choice_answer_surface(value)
+    normalized = _normalize_text(surface)
+    normalized = normalized.replace("−", "-").replace("–", "-").replace("—", "-")
+    return re.sub(r"[\s`'\".,;:()\[\]{}]+", "", normalized)
+
+
+def _choice_keys_equivalent(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    shorter, longer = sorted((left, right), key=len)
+    if len(shorter) < 6:
+        return False
+    return shorter in longer and len(shorter) / max(len(longer), 1) >= 0.45
+
+
+def _prefer_choice_surface(candidate: str, current: str) -> bool:
+    if not current:
+        return True
+    if not candidate:
+        return False
+    return len(candidate) < len(current)
+
+
+def _normalize_lesson_choice_surface(question_draft: LessonQuestionDraft) -> None:
+    """Make recognition options uniform and collapse semantically repeated choices."""
+
+    if question_draft.question_type not in {"mcq", "multi_select", "cloze"}:
+        return
+    original_choices = _dedupe_preserving_order(
+        [str(item).strip() for item in question_draft.choices if str(item).strip()]
+    )
+    if not original_choices:
+        return
+
+    original_correct = _choice_refs_to_values(list(question_draft.correct_choices), original_choices)
+    original_accepted = _choice_refs_to_values(list(question_draft.accepted_answers), original_choices)
+    original_reveal = (
+        _choice_ref_text_to_value(question_draft.reveal_answer, original_choices)
+        if str(question_draft.reveal_answer or "").strip()
+        else ""
+    )
+
+    groups: list[dict[str, Any]] = []
+    for original in original_choices:
+        surface = _choice_answer_surface(original)
+        if not surface:
+            continue
+        key = _choice_equivalence_key(surface)
+        match: dict[str, Any] | None = None
+        for group in groups:
+            if _choice_keys_equivalent(key, str(group["key"])):
+                match = group
+                break
+        if match is None:
+            groups.append({"surface": surface, "key": key, "members": [original]})
+            continue
+        match["members"].append(original)
+        if _prefer_choice_surface(surface, str(match["surface"])):
+            match["surface"] = surface
+            match["key"] = key
+
+    if not groups:
+        return
+
+    choices = [str(group["surface"]) for group in groups]
+    normalized_map: dict[str, str] = {}
+    key_map: dict[str, str] = {}
+    for group in groups:
+        surface = str(group["surface"])
+        for member in list(group["members"]) + [surface]:
+            normalized_map[_normalize_text(member)] = surface
+            normalized_map[_normalize_text(_choice_answer_surface(member))] = surface
+            key_map[_choice_equivalence_key(member)] = surface
+
+    def _map_choice_value(value: object, *, keep_unmatched: bool) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            return ""
+        mapped = normalized_map.get(_normalize_text(clean))
+        if mapped:
+            return mapped
+        surface = _choice_answer_surface(clean)
+        mapped = normalized_map.get(_normalize_text(surface)) or key_map.get(_choice_equivalence_key(surface))
+        if mapped:
+            return mapped
+        return surface if keep_unmatched else ""
+
+    def _map_choice_values(values: list[str], *, keep_unmatched: bool) -> list[str]:
+        mapped: list[str] = []
+        for value in values:
+            parts = _split_answers(str(value))
+            for part in parts:
+                item = _map_choice_value(part, keep_unmatched=keep_unmatched)
+                if item:
+                    mapped.append(item)
+        return _dedupe_preserving_order(mapped)
+
+    choice_norm = {_normalize_text(choice) for choice in choices}
+    question_draft.choices = choices
+    question_draft.correct_choices = [
+        item for item in _map_choice_values(original_correct, keep_unmatched=False)
+        if _normalize_text(item) in choice_norm
+    ]
+    question_draft.accepted_answers = _map_choice_values(original_accepted, keep_unmatched=True)
+    if original_reveal:
+        mapped_reveal = _map_choice_values([original_reveal], keep_unmatched=True)
+        if mapped_reveal:
+            question_draft.reveal_answer = " | ".join(mapped_reveal)
+
+
 def _normalize_lesson_hints(
     hints: list[str],
     *,
@@ -207,6 +376,9 @@ def _limit_lesson_question_choices(question_draft: LessonQuestionDraft) -> Lesso
     question_draft.accepted_answers = _choice_refs_to_values(list(question_draft.accepted_answers), choices)
     if str(question_draft.reveal_answer or "").strip():
         question_draft.reveal_answer = _choice_ref_text_to_value(question_draft.reveal_answer, choices)
+    question_draft.choices = choices
+    _normalize_lesson_choice_surface(question_draft)
+    choices = list(question_draft.choices)
     priority = _dedupe_preserving_order(
         list(question_draft.correct_choices)
         + ([question_draft.reveal_answer] if str(question_draft.reveal_answer or "").strip() else [])
@@ -326,6 +498,7 @@ def _randomize_lesson_question_choices(
 
     if question_draft.question_type not in {"mcq", "multi_select", "cloze"}:
         return question_draft
+    _normalize_lesson_choice_surface(question_draft)
     choices = _dedupe_preserving_order(list(question_draft.choices))
     question_draft.correct_choices = _choice_refs_to_values(list(question_draft.correct_choices), choices)
     question_draft.accepted_answers = _choice_refs_to_values(list(question_draft.accepted_answers), choices)
@@ -1003,6 +1176,9 @@ class LessonEngine:
             "Keep choices keyboard-friendly. For cloze, include [____] in the prompt.\n"
             "For mcq, multi_select, and cloze, include at most 5 model-generated choices because the UI reserves a sixth slot for inline typing.\n"
             "For multi_select, use 4-5 options whenever possible and include at least 2 correct choices; if only one answer is correct, use mcq instead.\n"
+            "Recognition-option quality gate: every mcq, multi_select, and cloze choice must be a bare answer candidate, not an explanation.\n"
+            "Keep all choices uniform in length, grammar, and information content; no choice may include because/which/represents-style justification.\n"
+            "Do not repeat equivalent answers or formulas in separate choices. Put explanations only in hints, reveal_answer, or evaluator_notes.\n"
             "If a typed answer would normally require accents, diacritics, or other hard-to-type characters, add easy ASCII equivalents to accepted_answers.\n"
             + learning_intent_style_guidance()
             + f"Topic: {self.topic}\n"
@@ -1214,10 +1390,12 @@ class LessonEngine:
         page_questions = self.repo.list_lesson_questions(run.id, page.page_slug if page is not None else None) if page is not None else []
         header_note = ""
         if run.ready_to_finish:
-            header_note = "Lesson cleared. Use /finish when you want to close the session."
-        footer_commands = ["/hint", "/answer", "/harder", "/easier", "/intuitive", "/spawn", "/forget"]
-        if question is not None and question.revealed:
-            footer_commands.append("/skip")
+            header_note = "Lesson cleared. Choose what happens next."
+        footer_commands: list[str] = []
+        if not run.ready_to_finish:
+            footer_commands = ["/hint", "/answer", "/harder", "/easier", "/intuitive", "/spawn", "/forget"]
+            if question is not None and question.revealed:
+                footer_commands.append("/skip")
         return LessonSnapshot(
             run=run,
             page=page,
@@ -1237,15 +1415,18 @@ class LessonEngine:
         question = snapshot.question
         page = snapshot.page
         if snapshot.run.ready_to_finish or question is None:
+            ready_message = snapshot.header_note or "Lesson ready. Choose what happens next."
             return LearningPartnerTurnDraft(
-                reply=snapshot.header_note or "Lesson ready. Use /finish to close the session.",
+                reply=ready_message,
                 current_step_index=(page.sequence_index + 1) if page is not None else 0,
                 total_steps=len([item for item in snapshot.pages if item.page_slug != "mistakes"]),
                 current_step_title=page.title if page is not None else "Lesson complete",
                 current_objective=page.intro_text if page is not None else "",
                 step_status=snapshot.run.lesson_status,
                 corrections=list(snapshot.feedback_lines),
-                question_type="free_text",
+                question_type="mcq",
+                mcq_options=lesson_finish_action_options(snapshot.run.lesson_mode),
+                next_action=LESSON_FINISH_MENU_ACTION,
             )
 
         prompt = str(question.prompt_json.get("prompt", "") or "")
@@ -1270,6 +1451,231 @@ class LessonEngine:
             cloze_blank_options=cloze_choices,
             support_cards=[page.intro_text] if page is not None and page.intro_text else [],
             next_action=snapshot.header_note,
+        )
+
+    def continue_after_clear(self, *, focus: str = "") -> LearningPartnerTurnDraft:
+        """Append an implications/applications page and continue the current lesson."""
+
+        run = self.repo.get_lesson_run(self.session.id)
+        if run is None:
+            return self.current_turn()
+
+        pages = self.repo.list_lesson_pages(run.id)
+        page_draft = self._extension_page_draft(run, focus=focus)
+        existing_pages = {item.page_slug for item in pages}
+        page_slug = _short_lesson_slug(
+            page_draft.title or "implications applications",
+            fallback=f"extension{len(pages) + 1}",
+            existing=existing_pages,
+        )
+        page = LessonPageRecord(
+            id=f"{run.id}:{page_slug}",
+            lesson_run_id=run.id,
+            session_id=self.session.id,
+            page_slug=page_slug,
+            title=page_draft.title or "Implications and applications",
+            intro_text=page_draft.intro or page_draft.focus,
+            sequence_index=len(pages),
+            status="pending",
+            question_count=len(page_draft.questions),
+        )
+        self.repo.create_lesson_page(page)
+
+        existing_questions = {
+            item.question_slug
+            for item in self.repo.list_lesson_questions(run.id)
+        }
+        first_question_slug = ""
+        for question_index, question_draft in enumerate(page_draft.questions[:3]):
+            _limit_lesson_question_choices(question_draft)
+            _randomize_lesson_question_choices(question_draft)
+            question_slug = _short_lesson_slug(
+                question_draft.skill_slug or question_draft.title or question_draft.prompt,
+                fallback=f"extension{question_index + 1}",
+                existing=existing_questions,
+            )
+            existing_questions.add(question_slug)
+            prompt_json = {
+                "title": question_draft.title,
+                "prompt": question_draft.prompt,
+                "choices": list(question_draft.choices),
+                "display_items": list(question_draft.ordered_items),
+            }
+            answer_json = {
+                "accepted_answers": list(question_draft.accepted_answers),
+                "correct_choices": list(question_draft.correct_choices),
+                "ordered_items": list(question_draft.ordered_items),
+                "hints": list(question_draft.hints),
+                "reveal_answer": question_draft.reveal_answer,
+                "error_tags": list(question_draft.error_tags),
+                "skill_label": question_draft.skill_label,
+                "page_intro": question_draft.page_intro,
+                "evaluator_notes": question_draft.evaluator_notes,
+            }
+            question = LessonQuestionRecord(
+                id=f"{run.id}:{question_slug}",
+                lesson_run_id=run.id,
+                session_id=self.session.id,
+                page_slug=page_slug,
+                question_slug=question_slug,
+                skill_slug=_short_lesson_slug(
+                    question_draft.skill_slug or question_draft.skill_label or page.title,
+                    fallback=f"extension_skill{question_index + 1}",
+                ),
+                question_type=question_draft.question_type,
+                prompt_json=prompt_json,
+                answer_json=answer_json,
+                metadata_json=QuestionTransformService.initial_metadata(
+                    prompt_json=prompt_json,
+                    answer_json=answer_json,
+                    active_context_ids=self._active_context_identifiers(),
+                ),
+                sequence_index=question_index,
+                status="pending",
+            )
+            self.repo.create_lesson_question(question)
+            if not first_question_slug:
+                first_question_slug = question_slug
+
+        run.ready_to_finish = False
+        run.lesson_status = "active"
+        run.active_page_slug = page_slug
+        run.active_question_slug = first_question_slug
+        run.active_page_index = page.sequence_index
+        run.active_question_index = 0
+        run.updated_at = _iso_now()
+        self.last_feedback = ["Continuing with implications and applications."]
+        self.repo.update_lesson_run(run)
+        self._touch_question_clock(run)
+        self._sync_session_pointer(run)
+        return self.turn_for()
+
+    def _extension_page_draft(self, run: LessonRunRecord, *, focus: str = "") -> LessonPageDraft:
+        if self.runtime.health().available:
+            pages = self.repo.list_lesson_pages(run.id)
+            questions = self.repo.list_lesson_questions(run.id)
+            outline = "\n".join(
+                f"- {page.title}: {page.intro_text}" for page in pages[-5:]
+            )
+            question_summary = "\n".join(
+                "- "
+                + (
+                    str(question.answer_json.get("skill_label", "") or "").strip()
+                    or str(question.prompt_json.get("title", "") or "").strip()
+                    or question.skill_slug.replace("_", " ")
+                )
+                for question in questions[-8:]
+            )
+            focus_line = f"Requested continuation focus: {focus}\n" if focus.strip() else ""
+            prompt = (
+                "Create one continuation page for a cleared ProductiveBrain lesson.\n"
+                "The page must extend the concept rather than repeat the cleared questions.\n"
+                "For math proofs, scientific theories, or conjectures, prioritize derived conclusions and implications.\n"
+                "For conceptual or technical domains, prioritize concrete applications and translational transfer.\n"
+                "Generate 2 or 3 active-recall questions, with at least one production-style question.\n"
+                "For mcq, multi_select, and cloze, every choice must be a uniform bare answer candidate.\n"
+                "Do not include explanations, justifications, or duplicate/equivalent choices in choices.\n"
+                f"Topic: {self.topic}\n"
+                f"Domain: {self.domain}\n"
+                f"{focus_line}"
+                f"Recent lesson outline:\n{outline}\n"
+                f"Recent skills/questions:\n{question_summary}\n"
+            )
+            try:
+                draft = self.runtime.generate_draft(
+                    LessonPageDraft,
+                    prompt,
+                    source_scope=f"lesson_extension:{run.id}:{len(pages)}",
+                    model=_resolve_learning_model_binding(self.runtime, "lesson_planning"),
+                    max_output_tokens=5000,
+                ).payload
+                draft.questions = [question for question in draft.questions if question.prompt.strip()][:3]
+                for question in draft.questions:
+                    _limit_lesson_question_choices(question)
+                    _randomize_lesson_question_choices(question)
+                if draft.questions:
+                    return draft
+            except DraftGenerationError:
+                pass
+        return self._fallback_extension_page(focus=focus)
+
+    def _fallback_extension_page(self, *, focus: str = "") -> LessonPageDraft:
+        topic = self.topic or stored_display_title(self.task) or "the current concept"
+        focus_text = focus.strip() or "implications, derived conclusions, and applications"
+        return LessonPageDraft(
+            title="Implications and applications",
+            focus=f"Extend {topic} into {focus_text}.",
+            intro=(
+                f"Now push {topic} beyond recognition: state what follows from it, "
+                "where it applies, and which assumptions keep the transfer valid."
+            ),
+            questions=[
+                LessonQuestionDraft(
+                    title="Transfer claim",
+                    prompt=(
+                        f"Give one non-trivial implication or application of {topic}. "
+                        "State the condition or assumption that makes the transfer valid."
+                    ),
+                    question_type="free_production",
+                    skill_slug="transfer_claim",
+                    skill_label="Transfer claim",
+                    accepted_answers=[
+                        "States a plausible implication or application and names the condition that makes it valid.",
+                    ],
+                    hints=[
+                        "Start with a result or definition from the lesson, then ask where it can be reused.",
+                        "Name the assumption before naming the implication.",
+                        "Avoid broad claims unless you can say why the hypotheses still hold.",
+                    ],
+                    reveal_answer=(
+                        "A strong answer names a specific implication or application and checks the "
+                        "assumption that permits the transfer."
+                    ),
+                    evaluator_notes="Reward specific transfer plus explicit assumptions.",
+                ),
+                LessonQuestionDraft(
+                    title="Valid extension",
+                    prompt=f"Which move best extends {topic} without overclaiming?",
+                    question_type="mcq",
+                    skill_slug="valid_extension",
+                    skill_label="Valid extension",
+                    choices=[
+                        "Check the hypotheses before transferring the result",
+                        "Ignore boundary cases because the pattern looks familiar",
+                        "Treat the notation as the concept itself",
+                        "Choose the broadest-sounding conclusion",
+                    ],
+                    accepted_answers=["Check the hypotheses before transferring the result"],
+                    correct_choices=["Check the hypotheses before transferring the result"],
+                    hints=[
+                        "A valid extension preserves the conditions that made the original idea true.",
+                        "Look for the choice that checks assumptions before applying the idea.",
+                        "The safest transfer names what must still hold.",
+                    ],
+                    reveal_answer="Check the hypotheses before transferring the result",
+                ),
+                LessonQuestionDraft(
+                    title="Boundary of transfer",
+                    prompt=(
+                        f"Name one situation where applying {topic} would fail or become misleading, "
+                        "and say which assumption breaks."
+                    ),
+                    question_type="short_text",
+                    skill_slug="transfer_boundary",
+                    skill_label="Transfer boundary",
+                    accepted_answers=[
+                        "Names a failure case and identifies the broken assumption.",
+                        "Identifies a boundary condition where the concept no longer applies.",
+                    ],
+                    hints=[
+                        "Think of the smallest change that would make the lesson's conclusion stop holding.",
+                        "Find the hidden assumption, then negate it.",
+                        "A boundary case is useful only if you can say why it breaks the transfer.",
+                    ],
+                    reveal_answer="A good answer pairs a failure case with the assumption that breaks there.",
+                    evaluator_notes="Accept any domain-appropriate boundary case with a clear broken assumption.",
+                ),
+            ],
         )
 
     def current_turn(self) -> LearningPartnerTurnDraft:
@@ -2072,6 +2478,8 @@ class LessonEngine:
                 "Keep it close to the original, but not identical.\n"
                 "Do not merely swap names or numbers.\n"
                 "For retry transforms, preserve high fidelity to the original skill while changing the discrimination path.\n"
+                "For mcq, multi_select, and cloze, every choice must be a uniform bare answer candidate.\n"
+                "Do not include explanations, justifications, or duplicate/equivalent choices; put explanation in reveal_answer or hints only.\n"
                 f"Transform kind: {transform}\n"
                 f"Original question type: {question.question_type}\n"
                 f"Original prompt data: {question.prompt_json}\n"

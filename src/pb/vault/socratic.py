@@ -973,7 +973,7 @@ def run_debrief_loop(
         if lowered in ("skip", "/exit", "/quit", "", "q"):
             engine.record_exit("user_exit")
             break
-        if lowered in ("finish", "done", "/finish", "/done"):
+        if lowered in ("finish", "done"):
             engine.record_exit("completed" if engine.collect_answers() else "user_exit")
             break
         question = engine.get_question(answer)

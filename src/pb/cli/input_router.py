@@ -40,6 +40,8 @@ _NAVIGATION_SEQUENCES = {
     "^[[B": "down",
     "^[[C": "right",
     "^[[D": "left",
+    "\t": "back",
+    "^I": "back",
 }
 
 
@@ -86,7 +88,10 @@ class QuestionCommandBuffer:
 
 
 def _extract_navigation_inputs(raw_text: str) -> list[str]:
-    remaining = str(raw_text or "").strip()
+    raw = str(raw_text or "")
+    if raw == "\t":
+        return ["back"]
+    remaining = raw.strip()
     if not remaining:
         return []
     directions: list[str] = []
@@ -223,6 +228,17 @@ def prompt_answer_or_command(
                             command=direction,
                         )
                         event.app.exit(result="")
+
+                @bindings.add("tab")
+                def _navigate_back(event) -> None:
+                    nonlocal navigation_result
+                    navigation_result = RoutedInput(
+                        kind="navigation",
+                        text="back",
+                        argv=("back",),
+                        command="back",
+                    )
+                    event.app.exit(result="")
             session = PromptSession(
                 completer=SlashCommandCompleter(get_commands),
                 complete_while_typing=False,
@@ -293,9 +309,6 @@ def classify_interactive_input(
 ) -> RoutedInput:
     """Classify one interactive line before any agent or tutor sees it."""
     stripped = (raw_text or "").strip()
-    if not stripped:
-        return RoutedInput(kind="empty")
-
     if active_learning:
         navigation = _extract_navigation_inputs(raw_text)
         if navigation:
@@ -305,6 +318,9 @@ def classify_interactive_input(
                 argv=tuple(navigation),
                 command=navigation[-1],
             )
+
+    if not stripped:
+        return RoutedInput(kind="empty")
 
     argv, _ = split_interactive_input(stripped)
     if allow_shell_commands and argv:

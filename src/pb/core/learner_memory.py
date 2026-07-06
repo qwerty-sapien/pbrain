@@ -21,6 +21,7 @@ from pb.core.learning_dossier import (
     list_learning_dossiers,
     resolve_subtopic_dossier_key,
 )
+from pb.core.session_activity import coerce_learning_partner_activity
 from pb.core.anki_bootstrap import ANKI_RECENT_REVIEW_SIGNAL_PREF, ANKI_REVIEW_THRESHOLD
 from pb.core.feedback_profile import load_learner_level_assertions
 from pb.core.learning_metadata import parse_learning_task_metadata
@@ -65,6 +66,7 @@ def append_partner_session_memory(
         return None
 
     transcript_path = Path(runtime_ctx.data_dir) / "transcripts" / f"{getattr(session, 'id', '')}.json"
+    activity = coerce_learning_partner_activity(generated)[-24:]
     prompt = (
         "Compact this learning-partner session into durable learner memory.\n"
         "Be concrete, not flattering. Extract only specific knowns, unknowns, gaps, corrections, and next moves.\n"
@@ -74,6 +76,7 @@ def append_partner_session_memory(
         f"Observed errors: {getattr(session, 'observed_errors', '')}\n"
         f"Next adjustment: {getattr(session, 'next_adjustment', '')}\n"
         f"Partner closeout: {generated.get('learning_partner_closeout', {})}\n"
+        f"Structured activity: {activity}\n"
         f"Recent control state: {generated.get('control_state_snapshot', {})}\n"
         f"Transcript: {transcript[-16:]}\n"
     )

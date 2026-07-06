@@ -22,6 +22,7 @@ import structlog
 from pb.core.durations import elapsed_minutes_and_label
 from pb.core.graph_writer import make_slug
 from pb.core.resources import read_template_text
+from pb.core.session_activity import format_learning_partner_activity_markdown
 from pb.domain.models import Project, Session, Task
 
 logger = structlog.get_logger()
@@ -125,6 +126,10 @@ class SessionLogWriter:
 
             # Actual outcome
             actual_outcome = session.actual_outcome or ""
+            activity_section = format_learning_partner_activity_markdown(
+                getattr(session, "generated_names", {}) or {},
+                limit=80,
+            ).strip() or "_No structured session activity captured._"
 
             # Completion and distraction
             completion_pct = (
@@ -152,6 +157,7 @@ class SessionLogWriter:
                 distraction=distraction,
                 tags=tags,
                 actual_outcome=actual_outcome,
+                activity_section=activity_section,
                 next_steps_section=next_steps_section,
             )
 

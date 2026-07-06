@@ -11,6 +11,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from pb.core.entity_refs import display_ref
+from pb.core.session_activity import format_learning_partner_activity_markdown
 
 app = typer.Typer(no_args_is_help=False)
 
@@ -92,6 +93,14 @@ def show_session_command(
         console.print(f"  Outcome: {match.actual_outcome}")
     if match.intended_outcome:
         console.print(f"  Intended: {escape(match.intended_outcome)}")
+    activity = format_learning_partner_activity_markdown(
+        getattr(match, "generated_names", {}) or {},
+        limit=40,
+    )
+    if activity:
+        from pb.cli.markdown import render_markdown
+
+        render_markdown(activity)
 
 
 @app.command("redo")

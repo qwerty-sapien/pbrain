@@ -393,6 +393,77 @@ def preview_rows_for_follow_on_specs(specs: list[dict[str, str]]) -> list[tuple[
     return rows
 
 
+def refine_follow_on_specs(specs: list[dict[str, str]], instruction: str) -> list[dict[str, str]]:
+    """Apply a visible deterministic refinement to follow-on task specs."""
+    note = " ".join((instruction or "").split())
+    if not note:
+        return [dict(spec) for spec in specs]
+
+    lowered = note.lower()
+    if any(token in lowered for token in ("descriptive", "specific", "concrete", "detail")):
+        return [_descriptive_follow_on_spec(spec) for spec in specs]
+
+    refined: list[dict[str, str]] = []
+    for spec in specs:
+        updated = dict(spec)
+        milestone = (updated.get("milestone") or "").strip()
+        suffix = f" Refinement request: {note}."
+        updated["milestone"] = f"{milestone}{suffix}" if milestone else f"Apply refinement request: {note}."
+        refined.append(updated)
+    return refined
+
+
+def _descriptive_follow_on_spec(spec: dict[str, str]) -> dict[str, str]:
+    updated = dict(spec)
+    focus = _follow_on_focus(updated)
+    detail = _descriptive_focus_detail(focus)
+    domain = _follow_on_domain(updated)
+    updated["title"] = f"Reinforce {focus}: concrete correction and check"
+    updated["scope"] = f"{domain}: {focus} via {detail}" if domain else f"{focus} via {detail}"
+    updated["milestone"] = (
+        f"Repair {focus} by {detail}; finish by naming the previous failure mode "
+        "and the corrected reasoning check."
+    )
+    return updated
+
+
+def _follow_on_focus(spec: dict[str, str]) -> str:
+    title = (spec.get("title") or "").strip()
+    match = re.match(r"(?i)^reinforce\s+(.+?)(?::|$)", title)
+    if match and match.group(1).strip():
+        return match.group(1).strip()
+    scope = (spec.get("scope") or "").strip()
+    if ":" in scope:
+        _, rest = scope.split(":", 1)
+        if rest.strip():
+            return rest.strip()
+    return title or "foundation"
+
+
+def _follow_on_domain(spec: dict[str, str]) -> str:
+    scope = (spec.get("scope") or "").strip()
+    if ":" in scope:
+        domain, _ = scope.split(":", 1)
+        return domain.strip()
+    return ""
+
+
+def _descriptive_focus_detail(focus: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", (focus or "").lower()).strip()
+    details = {
+        "problem setup": "stating the givens, target quantity, assumptions, and required proof target before choosing a method",
+        "representation choice": "comparing two candidate representations and justifying the one that matches the problem constraints",
+        "technique selection": "matching each available technique to the condition that makes it valid",
+        "execution": "working one full example with every algebraic or logical transition written out",
+        "verification": "checking the final result against the domain, assumptions, and required properties",
+        "metric properties": "verifying non-negativity, identity of indiscernibles, symmetry, and the triangle inequality separately",
+    }
+    return details.get(
+        normalized,
+        "working one concrete example, naming the weak step, and checking the corrected reasoning against the task goal",
+    )
+
+
 def _create_task_for_node(repo, goal: GoalArc, roadmap: GoalRoadmapDraft, node: GoalRoadmapNodeDraft, *, sequence_status: str) -> Task:
     branch = "practise" if node.branch == "practise" else "study"
     description = build_learning_task_description(

@@ -22,6 +22,7 @@ T = TypeVar("T")
 # Sentinel value indicating the user pressed "0" for manual input
 _MANUAL_INPUT_SENTINEL = "__MANUAL_INPUT__"
 _SLASH_COMMAND_SENTINEL = "__PB_SLASH_COMMAND__"
+_NAVIGATION_BACK_SENTINEL = "__PB_NAV_BACK__"
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,7 @@ def pick_single_choice(
     return_result: bool = False,
     slash_registry=None,
     pb_command_resolver=None,
+    allow_back_navigation: bool = False,
 ) -> Optional[str] | PickerResult:
     """Single-select inline picker using _interactive_pick."""
     if not sys.stdin.isatty():
@@ -212,7 +214,13 @@ def pick_single_choice(
             editable_state=editable_state,
             editable_placeholder=inline_prompt,
             command_buffer_state=command_buffer,
+            allow_back_navigation=allow_back_navigation,
         )
+        if res == _NAVIGATION_BACK_SENTINEL:
+            from pb.cli.input_router import RoutedInput
+
+            routed = RoutedInput(kind="navigation", text="back", argv=("back",), command="back")
+            return PickerResult(kind="command", value=routed) if return_result else None
         if isinstance(res, str) and res.startswith("/"):
             routed = classify_interactive_input(
                 res,
@@ -244,6 +252,7 @@ def pick_many_choices(
     return_result: bool = False,
     slash_registry=None,
     pb_command_resolver=None,
+    allow_back_navigation: bool = False,
 ) -> list[str] | PickerResult:
     """Multi-select inline picker returning the selected option values."""
     if not sys.stdin.isatty():
@@ -275,7 +284,13 @@ def pick_many_choices(
             editable_state=editable_state,
             editable_placeholder=inline_prompt,
             command_buffer_state=command_buffer,
+            allow_back_navigation=allow_back_navigation,
         )
+        if res == _NAVIGATION_BACK_SENTINEL:
+            from pb.cli.input_router import RoutedInput
+
+            routed = RoutedInput(kind="navigation", text="back", argv=("back",), command="back")
+            return PickerResult(kind="command", value=routed) if return_result else []
         if isinstance(res, str) and res.startswith("/"):
             routed = classify_interactive_input(
                 res,

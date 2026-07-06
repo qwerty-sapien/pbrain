@@ -15,6 +15,7 @@ from typing import Callable, Optional
 
 import structlog
 from rich.markup import escape
+from rich.text import Text
 
 # Import prompt_toolkit at module level so tests can patch these names.
 # prompt_toolkit is a declared dependency; if unavailable, shell degrades to input() loop.
@@ -46,6 +47,7 @@ from pb.core.error_logging import format_logged_exception, log_error
 from pb.core.learning_metadata import parse_learning_task_metadata
 from pb.core.learning_partner import LearningPartnerSession
 from pb.core.naming import stored_short_title
+from pb.core.renderables import renderable_cli_text
 from pb.vault.indexer import (
     is_folder_index_stale,
     rebuild_folder_index,
@@ -137,6 +139,10 @@ def _render_partner_turn_chain(partner: LearningPartnerSession, turn) -> RoutedI
         if picker_input.kind == "navigation":
             partner._browse(picker_input.argv or (picker_input.command,))
             continue
+        if picker_input.kind == "lesson_continue":
+            partner._reset_view()
+            current_turn = partner.continue_after_clear()
+            continue
         if picker_input.kind == "answer":
             current_turn = partner.respond_once(picker_input.text)
             continue
@@ -226,9 +232,9 @@ def make_prompt_callable(
                 context_label = summarize_context_label(locked)
         except Exception:
             pass
-        _cache["task_name"] = task_name
+        _cache["task_name"] = renderable_cli_text(task_name) if task_name else ""
         _cache["timer_label"] = timer_label
-        _cache["context_label"] = context_label
+        _cache["context_label"] = renderable_cli_text(context_label) if context_label else ""
 
         dispatch_label = ""
         try:
@@ -609,15 +615,17 @@ def run_shell(click_app, vault_root: Path, repo, on_cd: Callable[[], None] | Non
         "on",
     }
 
-    # D-27: habit insights on launch — identical to existing main.py lines 194-206
+    # D-27: habit insights on launch.
     try:
-        from pb.core.insights import InsightEngine
+        from pb.core.insights import InsightEngine, streak_banner_style_for_message
         from pb.storage.database import get_connection
         with get_connection() as conn:
             engine = InsightEngine(conn)
             insights = engine.get_insights(max_count=2)
         for msg in insights:
-            console.print(f"  [dim]· {escape(msg)}[/]")
+            line = Text("  · ", style="dim")
+            line.append(msg, style=streak_banner_style_for_message(msg) or "dim")
+            console.print(line)
         if insights:
             console.print("")
     except Exception:
@@ -637,7 +645,9 @@ def run_shell(click_app, vault_root: Path, repo, on_cd: Callable[[], None] | Non
         active_session = None
     active_label = "none"
     if active_session is not None:
-        active_label = getattr(active_session, "subject_scope", "") or getattr(active_session, "branch", "study") or "active"
+        active_label = renderable_cli_text(
+            getattr(active_session, "subject_scope", "") or getattr(active_session, "branch", "study") or "active"
+        )
     console.print(
         f"pb shell  vault={escape(vault_root.name)}  active={escape(active_label)}  exit=exit|quit|Ctrl-D"
     )
@@ -1144,6 +1154,7 @@ def _dispatch(
     runtime_ctx=None,
     raw_input: str | None = None,
     pb_command_resolver: PbCommandResolver | None = None,
+    routed_input: RoutedInput | None = None,
 ) -> None:
     """Dispatch a parsed command to vault commands or the Click app."""
     if not args:
@@ -1164,7 +1175,7 @@ def _dispatch(
         if partner is not None:
             slash_registry = partner.command_registry
 
-    decision = classify_interactive_input(
+    decision = routed_input or classify_interactive_input(
         raw_text,
         pb_command_resolver=resolver,
         slash_registry=slash_registry,
@@ -1190,6 +1201,7 @@ def _dispatch(
                 runtime_ctx=runtime_ctx,
                 raw_input=nested.text,
                 pb_command_resolver=resolver,
+                routed_input=nested,
             )
         return
 
@@ -1209,9 +1221,10 @@ def _dispatch(
                     runtime_ctx=runtime_ctx,
                     raw_input=nested.text,
                     pb_command_resolver=resolver,
+                    routed_input=nested,
                 )
             return
-        get_err_console().print("[error]Arrow navigation is only available inside an active learning session.[/]")
+        get_err_console().print("[error]Arrow/Tab navigation is only available inside an active learning session.[/]")
         return
 
     if decision.kind == "slash_command":
@@ -1233,6 +1246,7 @@ def _dispatch(
                     runtime_ctx=runtime_ctx,
                     raw_input=nested.text,
                     pb_command_resolver=resolver,
+                    routed_input=nested,
                 )
         return
 
@@ -1245,6 +1259,9 @@ def _dispatch(
 
     dispatched_args = list(decision.argv)
     first = decision.command.lower() if decision.command else (dispatched_args[0].lower() if dispatched_args else "")
+    follow_up_command = ""
+    if decision.kind == "pb_command" and decision.args.startswith("then:"):
+        follow_up_command = decision.args[len("then:"):].strip()
 
     if decision.kind == "shell_command" and first == "ls":
         cmd_ls(_cwd_ref[0])
@@ -1305,6 +1322,10 @@ def _dispatch(
         prior_active_session_id = getattr(previous_session, "id", None)
     try:
         click_app(dispatched_args, standalone_mode=False)   # D-03: existing routing pattern
+        if follow_up_command:
+            follow_up_args = shlex.split(follow_up_command)
+            if follow_up_args:
+                click_app(follow_up_args, standalone_mode=False)
     except SystemExit:
         pass
     except Exception as e:

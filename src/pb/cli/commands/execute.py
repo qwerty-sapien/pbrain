@@ -27,6 +27,7 @@ from pb.core.entity_refs import display_ref
 from pb.core.goal_roadmaps import (
     materialize_next_frontier_tasks,
     preview_rows_for_follow_on_specs,
+    refine_follow_on_specs,
     roadmap_follow_on_specs,
 )
 from pb.core.models import Task, utc_now
@@ -190,7 +191,7 @@ def _maybe_create_roadmap_follow_ons(ctx: typer.Context, repo, task, assessment)
         elif any(token in decision.text.lower() for token in ("two", "2")):
             trimmed = specs[:2]
         else:
-            trimmed = specs
+            trimmed = refine_follow_on_specs(specs, decision.text)
         specs = trimmed
         render_styled_preview(
             title="Next Project Tasks",
@@ -691,40 +692,36 @@ def finish_task(
 
     # D-11: --debrief flag triggers Socratic debrief (opt-in only; no prompt without flag)
     if debrief:
-        if branch != "study":
-            console.print("[warn]`pb finish --debrief` is only available for study sessions.[/]")
-            debrief = False
-        else:
+        try:
+            socratic_service = ctx.obj['factory']['socratic_service']()
+            from pb.cli.console import get_console as _get_console
+            from pb.core.graph_writer import make_slug as _make_slug
+            from pb.llm.gemini import FLASH_LITE_MODEL as _FLASH_LITE
+            console_local = _get_console()
+            qa_pairs = socratic_service.run_finish_debrief(
+                session=session, task=task, console=console_local
+            )
+            if qa_pairs:
+                domain = getattr(task, "domain", None) or getattr(session, "domain", None)
+                if domain:
+                    all_answers = " ".join(a for _, a in qa_pairs)
+                    slug = _make_slug(all_answers[:60]) or "finish-debrief"
+                    socratic_service.build_and_submit(
+                        qa_pairs=qa_pairs,
+                        domain=domain,
+                        slug=slug,
+                        template="brief",
+                        sync=False,
+                        model=_FLASH_LITE,
+                        console=console_local,
+                    )
+        except Exception as exc:
+            # Non-fatal: --debrief failure must not block finish
             try:
-                socratic_service = ctx.obj['factory']['socratic_service']()
-                from pb.cli.console import get_console as _get_console
-                from pb.core.graph_writer import make_slug as _make_slug
-                from pb.llm.gemini import FLASH_LITE_MODEL as _FLASH_LITE
-                console_local = _get_console()
-                qa_pairs = socratic_service.run_finish_debrief(
-                    session=session, task=task, console=console_local
-                )
-                if qa_pairs:
-                    domain = getattr(task, "domain", None) or getattr(session, "domain", None)
-                    if domain:
-                        all_answers = " ".join(a for _, a in qa_pairs)
-                        slug = _make_slug(all_answers[:60]) or "finish-debrief"
-                        socratic_service.build_and_submit(
-                            qa_pairs=qa_pairs,
-                            domain=domain,
-                            slug=slug,
-                            template="brief",
-                            sync=False,
-                            model=_FLASH_LITE,
-                            console=console_local,
-                        )
-            except Exception as exc:
-                # Non-fatal: --debrief failure must not block finish
-                try:
-                    from pb.cli.console import get_console as _gc
-                    _gc().print(f"[warn]Debrief skipped: {exc}[/]")
-                except Exception:
-                    pass
+                from pb.cli.console import get_console as _gc
+                _gc().print(f"[warn]Debrief skipped: {exc}[/]")
+            except Exception:
+                pass
 
     # Phase 17 GRPH-05, D-06: Update domain _state.md on finish
     try:

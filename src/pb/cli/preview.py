@@ -14,7 +14,6 @@ from typing import Optional
 
 import typer
 from rich.console import Group
-from rich.markdown import Markdown as RichMarkdown
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
@@ -22,6 +21,7 @@ from rich.text import Text
 
 from pb.cli.helpers import ConfirmationDecision, confirm_choice, prompt_confirmation
 from pb.cli.console import get_console
+from pb.cli.markdown import render_markdown_to_rich
 from pb.core.renderables import renderable_cli_text
 
 
@@ -151,7 +151,7 @@ def render_markdown_preview(
             clean_lines = [line.rstrip() for line in section_content if str(line).strip()]
             if not clean_lines:
                 continue
-            elements.append(RichMarkdown("\n".join(clean_lines)))
+            elements.append(render_markdown_to_rich("\n".join(clean_lines)))
         else:
             elements.append(section_content)
 

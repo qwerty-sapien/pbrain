@@ -22,6 +22,8 @@ tags: ${tags}
 
 ${actual_outcome}
 
+${activity_section}
+
 ## Next Learning Steps
 
 ${next_steps_section}

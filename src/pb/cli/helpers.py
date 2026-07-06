@@ -19,6 +19,7 @@ import typer
 from pb.cli.input_router import QuestionCommandBuffer
 from pb.core.matching import MatchCandidate, resolve_strict_match
 from pb.core.naming import stored_short_title
+from pb.core.renderables import renderable_cli_text
 
 try:
     from prompt_toolkit.application import Application
@@ -93,6 +94,9 @@ _NO_WORDS = {
 }
 _MODIFY_HINTS = ("change", "edit", "refine", "modify", "different", "half", "double", "reduce", "less", "more")
 _CLARIFY_HINTS = ("why", "what", "explain", "clarify", "help")
+_PREVIEW_CONTROLS = "accept (`) | reject (q)"
+_PREVIEW_REFINE_CONTROLS = "accept (`) | reject (q) | refine (<type>)"
+_NAVIGATION_BACK_SENTINEL = "__PB_NAV_BACK__"
 
 def _read_key() -> str:
     """Read a single keypress, returning a named action string."""
@@ -122,6 +126,8 @@ def _read_key() -> str:
             return "space"
         if ch == "`":
             return "backtick"
+        if ch == "\t":
+            return "tab"
         if ch == "\x0f":
             return "ctrl-o"
         if ch in ("\x08", "\x7f"):
@@ -253,29 +259,41 @@ def _render_picker(
     editable_placeholder: str = "Type here",
     command_mode: bool = False,
     command_buffer_text: str = "",
+    allow_back_navigation: bool = False,
 ) -> list[str]:
     """Build display lines for the picker, with scrollable viewport for >30 items.
 
     Text is explicitly wrapped to the terminal width so long labels stay fully
     visible without relying on terminal autowrap.
     """
+    rendered_labels = [renderable_cli_text(label) for label in labels]
+    rendered_header = renderable_cli_text(header)
+    rendered_details = [renderable_cli_text(detail) for detail in details] if details is not None else None
+    rendered_verbose_labels = (
+        [renderable_cli_text(label) for label in verbose_labels]
+        if verbose_labels is not None
+        else None
+    )
+    rendered_editable_text = renderable_cli_text(editable_text)
+    rendered_editable_placeholder = renderable_cli_text(editable_placeholder)
+
     if width is None:
         width = shutil.get_terminal_size().columns
-    total_items = len(labels) + (1 if multi else 0)
-    use_viewport = len(labels) > _SCROLL_THRESHOLD
+    total_items = len(rendered_labels) + (1 if multi else 0)
+    use_viewport = len(rendered_labels) > _SCROLL_THRESHOLD
     if use_viewport:
         viewport_size = _SCROLL_THRESHOLD
         half = viewport_size // 2
         start = max(0, cursor - half)
         end = start + viewport_size
-        if end > len(labels):
-            end = len(labels)
+        if end > len(rendered_labels):
+            end = len(rendered_labels)
             start = max(0, end - viewport_size)
         visible_range = range(start, end)
     else:
-        visible_range = range(len(labels))
+        visible_range = range(len(rendered_labels))
 
-    header_lines = [part.rstrip() for part in str(header or "").split("\n") if part.strip()]
+    header_lines = [part.rstrip() for part in str(rendered_header or "").split("\n") if part.strip()]
     lines = [f"  {header_lines[0]}" if header_lines else "  Choose"]
     for extra in header_lines[1:]:
         lines.extend(_wrap_picker_text(extra, width, "    "))
@@ -284,12 +302,12 @@ def _render_picker(
         lines.append(f"  ▲ {visible_range.start} more above")
     for i in visible_range:
         arrow = "❯" if i == cursor else "•"
-        label = labels[i]
+        label = rendered_labels[i]
         if editable_index is not None and i == editable_index:
-            placeholder = editable_placeholder.strip() or "Type here"
-            label = f"{editable_text}" if editable_text else f"<{placeholder}>"
-        if verbose and verbose_labels and i < len(verbose_labels):
-            label = verbose_labels[i]
+            placeholder = rendered_editable_placeholder.strip() or "Type here"
+            label = f"{rendered_editable_text}" if editable_text else f"<{placeholder}>"
+        if verbose and rendered_verbose_labels and i < len(rendered_verbose_labels):
+            label = rendered_verbose_labels[i]
         if i == cursor:
             label = f"[ {label} ]"
         if multi:
@@ -309,16 +327,16 @@ def _render_picker(
                 width=width,
                 verbose=verbose,
             )
-    if use_viewport and visible_range.stop < len(labels):
-        lines.append(f"  ▼ {len(labels) - visible_range.stop} more below")
+    if use_viewport and visible_range.stop < len(rendered_labels):
+        lines.append(f"  ▼ {len(rendered_labels) - visible_range.stop} more below")
     if multi:
         arrow = "❯" if cursor == len(labels) else "•"
         n = len(checked)
         lines.extend(_wrap_picker_text(f"Submit selections ({n} selected)", width, f"  {arrow}    "))
-    if preview_open and 0 <= cursor < len(labels):
-        preview_text = labels[cursor]
-        if details and cursor < len(details):
-            preview_text = details[cursor]
+    if preview_open and 0 <= cursor < len(rendered_labels):
+        preview_text = rendered_labels[cursor]
+        if rendered_details and cursor < len(rendered_details):
+            preview_text = rendered_details[cursor]
         lines.extend(_wrap_picker_text("Preview:", width, "  "))
         lines.extend(_wrap_picker_preview_text(preview_text, width, "    "))
     if command_mode:
@@ -330,6 +348,8 @@ def _render_picker(
         controls = "  Controls: digits jump  Enter select  → preview  Ctrl+O details"
     if editable_index is not None:
         controls += "  type edits inline  Backspace delete"
+    if allow_back_navigation:
+        controls += "  Tab back"
     controls += "  Q cancel"
     lines.extend(_wrap_picker_text(controls, width, "  "))
     return lines
@@ -411,8 +431,10 @@ def _fallback_pick(
     multi: bool,
 ) -> Optional[list[int]]:
     """Simple input()-based fallback for non-TTY contexts (tests, pipes)."""
-    print(f"  {header}:")
-    for i, label in enumerate(labels):
+    rendered_header = renderable_cli_text(header)
+    rendered_labels = [renderable_cli_text(label) for label in labels]
+    print(f"  {rendered_header}:")
+    for i, label in enumerate(rendered_labels):
         print(f"  {i + 1}. {label}")
 
     try:
@@ -434,7 +456,7 @@ def _fallback_pick(
 
 def prompt_text(label: str, *, default: str = "", err: bool = False) -> str:
     """Prompt without Click-style [default] decorations."""
-    return str(typer.prompt(label, default=default, show_default=False, err=err)).strip()
+    return str(typer.prompt(renderable_cli_text(label), default=default, show_default=False, err=err)).strip()
 
 
 def interpret_confirmation(raw: str, *, default: bool = False, mode: str = "standard") -> ConfirmationDecision:
@@ -470,24 +492,78 @@ def prompt_confirmation(
 ) -> ConfirmationDecision:
     """Prompt and parse a yes/no-style reply with light intent inference."""
     if mode == "preview_refine":
-        raw = prompt_text(
-            f"{label} [type refinement, Enter/` accept, q reject]",
-            default="",
-            err=err,
-        )
-        return interpret_confirmation(raw, default=default, mode="preview")
+        return _prompt_preview_confirmation(label, default=default, err=err, allow_refinement=True)
     if mode == "preview":
-        raw = prompt_text(
-            f"{label} [Enter/` accept, q reject]",
-            default="",
-            err=err,
-        )
-        return interpret_confirmation(raw, default=default, mode="standard")
+        return _prompt_preview_confirmation(label, default=default, err=err, allow_refinement=False)
 
     hint = "Y/n" if default else "y/N"
     default_value = "y" if default else "n"
     raw = prompt_text(f"{label} ({hint})", default=default_value, err=err)
     return interpret_confirmation(raw, default=default, mode=mode)
+
+
+def _prompt_preview_confirmation(
+    label: str,
+    *,
+    default: bool,
+    err: bool,
+    allow_refinement: bool,
+) -> ConfirmationDecision:
+    """Preview prompt where accept/reject are single-key actions in a TTY."""
+    controls = _PREVIEW_REFINE_CONTROLS if allow_refinement else _PREVIEW_CONTROLS
+    if not _is_real_tty():
+        raw = prompt_text(f"{label} [{controls}]", default="", err=err)
+        return interpret_confirmation(raw, default=default, mode="preview" if allow_refinement else "standard")
+
+    stream = sys.stderr if err else sys.stdout
+    stream.write(f"{renderable_cli_text(label)} [{controls}] ")
+    stream.flush()
+
+    buffer: list[str] = []
+    while True:
+        key = _read_key()
+        if not buffer:
+            if key == "backtick":
+                stream.write("`\n")
+                stream.flush()
+                return ConfirmationDecision("accept")
+            if key == "q":
+                stream.write("q\n")
+                stream.flush()
+                return ConfirmationDecision("cancel")
+            if key == "enter":
+                stream.write("\n")
+                stream.flush()
+                return ConfirmationDecision("accept" if default else "cancel")
+            if key in {"esc", "ctrl-c", "ctrl-d"}:
+                stream.write("\n")
+                stream.flush()
+                return ConfirmationDecision("cancel")
+            if not allow_refinement:
+                continue
+
+        if not allow_refinement:
+            continue
+        if key == "enter":
+            text = "".join(buffer).strip()
+            stream.write("\n")
+            stream.flush()
+            return interpret_confirmation(text, default=default, mode="preview")
+        if key in {"esc", "ctrl-c", "ctrl-d"}:
+            stream.write("\n")
+            stream.flush()
+            return ConfirmationDecision("cancel")
+        if key == "backspace":
+            if buffer:
+                buffer.pop()
+                stream.write("\b \b")
+                stream.flush()
+            continue
+        char = " " if key == "space" else key
+        if len(char) == 1 and char.isprintable():
+            buffer.append(char)
+            stream.write(char)
+            stream.flush()
 
 
 def confirm_choice(label: str, *, default: bool = False, err: bool = False) -> bool:
@@ -508,6 +584,7 @@ def _interactive_pick(
     editable_state: Optional[dict[str, str]] = None,
     editable_placeholder: str = "Type here",
     command_buffer_state: Optional[QuestionCommandBuffer] = None,
+    allow_back_navigation: bool = False,
 ) -> Optional[list[int] | str]:
     """Arrow-navigated picker. Returns list of selected indices or None.
 
@@ -526,6 +603,7 @@ def _interactive_pick(
             editable_index=editable_index,
             editable_state=editable_state,
             editable_placeholder=editable_placeholder,
+            allow_back_navigation=allow_back_navigation,
         )
 
     try:
@@ -540,6 +618,7 @@ def _interactive_pick(
             editable_state=editable_state,
             editable_placeholder=editable_placeholder,
             command_buffer_state=command_buffer_state,
+            allow_back_navigation=allow_back_navigation,
         )
     except Exception:
         return _simple_tty_pick(
@@ -553,6 +632,7 @@ def _interactive_pick(
             editable_state=editable_state,
             editable_placeholder=editable_placeholder,
             command_buffer_state=command_buffer_state,
+            allow_back_navigation=allow_back_navigation,
         )
 
 
@@ -662,6 +742,7 @@ def _prompt_toolkit_pick(
                 editable_placeholder=editable_placeholder,
                 command_mode=_command_active(),
                 command_buffer_text=_command_text(),
+                allow_back_navigation=allow_back_navigation,
             )
         )
 
@@ -734,6 +815,11 @@ def _prompt_toolkit_pick(
     @bindings.add("c-d")
     def _cancel(_event) -> None:
         finish(None)
+
+    if allow_back_navigation:
+        @bindings.add("tab")
+        def _navigate_back(_event) -> None:
+            finish(_NAVIGATION_BACK_SENTINEL)
 
     if allow_slash_commands:
         @bindings.add("/")
@@ -827,7 +913,7 @@ def _prompt_toolkit_pick(
             event.app.invalidate()
 
     for digit in "123456789":
-        @bindings.add(digit)
+        @bindings.add(digit, eager=True)
         def _pick_digit(event, digit=digit) -> None:
             if _command_active():
                 _append_command(digit)
@@ -872,6 +958,7 @@ def _simple_tty_pick(
     editable_state: Optional[dict[str, str]] = None,
     editable_placeholder: str = "Type here",
     command_buffer_state: Optional[QuestionCommandBuffer] = None,
+    allow_back_navigation: bool = False,
 ) -> Optional[list[int] | str]:
     """Fallback interactive picker for real terminals when prompt_toolkit fails."""
     cursor = 0
@@ -933,12 +1020,16 @@ def _simple_tty_pick(
         editable_placeholder=editable_placeholder,
         command_mode=_command_active(),
         command_buffer_text=_command_text(),
+        allow_back_navigation=allow_back_navigation,
     )
     _draw(lines, 0)
     prev_count = _screen_line_count(lines)
 
     while True:
         key = _read_key()
+
+        if allow_back_navigation and key == "tab":
+            return _NAVIGATION_BACK_SENTINEL
 
         if key in ("esc", "q", "ctrl-c", "ctrl-d"):
             if _command_active() and key == "q":
@@ -958,6 +1049,7 @@ def _simple_tty_pick(
                     editable_placeholder=editable_placeholder,
                     command_mode=_command_active(),
                     command_buffer_text=_command_text(),
+                    allow_back_navigation=allow_back_navigation,
                 )
                 _draw(lines, prev_count)
                 prev_count = _screen_line_count(lines)
@@ -980,6 +1072,7 @@ def _simple_tty_pick(
                     editable_placeholder=editable_placeholder,
                     command_mode=_command_active(),
                     command_buffer_text=_command_text(),
+                    allow_back_navigation=allow_back_navigation,
                 )
                 _draw(lines, prev_count)
                 prev_count = _screen_line_count(lines)
@@ -1034,6 +1127,7 @@ def _simple_tty_pick(
                     editable_placeholder=editable_placeholder,
                     command_mode=_command_active(),
                     command_buffer_text=_command_text(),
+                    allow_back_navigation=allow_back_navigation,
                 )
                 _draw(lines, prev_count)
                 prev_count = _screen_line_count(lines)
@@ -1057,6 +1151,7 @@ def _simple_tty_pick(
                     editable_placeholder=editable_placeholder,
                     command_mode=_command_active(),
                     command_buffer_text=_command_text(),
+                    allow_back_navigation=allow_back_navigation,
                 )
                 _draw(lines, prev_count)
                 prev_count = _screen_line_count(lines)
@@ -1098,6 +1193,7 @@ def _simple_tty_pick(
                     editable_placeholder=editable_placeholder,
                     command_mode=_command_active(),
                     command_buffer_text=_command_text(),
+                    allow_back_navigation=allow_back_navigation,
                 )
                 _draw(lines, prev_count)
                 prev_count = _screen_line_count(lines)
@@ -1119,6 +1215,7 @@ def _simple_tty_pick(
                     editable_placeholder=editable_placeholder,
                     command_mode=_command_active(),
                     command_buffer_text=_command_text(),
+                    allow_back_navigation=allow_back_navigation,
                 )
                 _draw(lines, prev_count)
                 prev_count = _screen_line_count(lines)
@@ -1157,6 +1254,7 @@ def _simple_tty_pick(
             editable_placeholder=editable_placeholder,
             command_mode=_command_active(),
             command_buffer_text=_command_text(),
+            allow_back_navigation=allow_back_navigation,
         )
         _draw(lines, prev_count)
         prev_count = _screen_line_count(lines)

@@ -7,9 +7,72 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
+
+
+_STREAK_COLOR_STOPS: tuple[tuple[int, tuple[int, int, int]], ...] = (
+    (1, (217, 221, 227)),  # grey-white
+    (3, (154, 226, 127)),  # light green
+    (7, (16, 185, 129)),   # emerald green
+    (10, (190, 242, 64)),  # yellow-green
+    (14, (255, 127, 64)),  # yellow-vermillion
+    (20, (255, 192, 77)),  # lighter yellow-vermillion before gold step
+)
+_STREAK_GOLD = "#ffd700"
+_STREAK_RE = re.compile(r"(?P<days>\d+)-day streak")
+
+
+def streak_banner_text(streak: int) -> str:
+    """Return the user-facing streak banner text."""
+    icon = ""
+    if streak >= 21:
+        icon = " ✨"
+    elif streak >= 14:
+        icon = " 🌟"
+    elif streak >= 7:
+        icon = " ⭐"
+    return f"{streak}-day streak!{icon}"
+
+
+def streak_banner_style(streak: int) -> str:
+    """Return a Rich style for the streak banner color progression."""
+    if streak >= 21:
+        return f"bold {_STREAK_GOLD}"
+    if streak <= _STREAK_COLOR_STOPS[0][0]:
+        return f"bold {_rgb_to_hex(_STREAK_COLOR_STOPS[0][1])}"
+    for (left_day, left_rgb), (right_day, right_rgb) in zip(
+        _STREAK_COLOR_STOPS,
+        _STREAK_COLOR_STOPS[1:],
+    ):
+        if left_day <= streak <= right_day:
+            span = max(1, right_day - left_day)
+            ratio = (streak - left_day) / span
+            return f"bold {_rgb_to_hex(_interpolate_rgb(left_rgb, right_rgb, ratio))}"
+    return f"bold {_rgb_to_hex(_STREAK_COLOR_STOPS[-1][1])}"
+
+
+def streak_banner_style_for_message(message: str) -> str | None:
+    """Return the streak style for an insight message, if it is a streak."""
+    match = _STREAK_RE.search(message or "")
+    if not match:
+        return None
+    return streak_banner_style(int(match.group("days")))
+
+
+def _interpolate_rgb(
+    left: tuple[int, int, int],
+    right: tuple[int, int, int],
+    ratio: float,
+) -> tuple[int, int, int]:
+    ratio = max(0.0, min(1.0, ratio))
+    return tuple(round(l + (r - l) * ratio) for l, r in zip(left, right))
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
 
 
 class InsightEngine:
@@ -146,7 +209,7 @@ class InsightEngine:
                 else:
                     break
             if streak >= 2:
-                return f"{streak}-day streak!"
+                return streak_banner_text(streak)
         except Exception:
             pass
         return None

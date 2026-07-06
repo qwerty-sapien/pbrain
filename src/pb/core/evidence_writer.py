@@ -32,10 +32,11 @@ import structlog
 import yaml
 
 from pb.core.durations import elapsed_minutes_and_label
+from pb.core.graph_writer import make_slug
 from pb.core.learning_metadata import parse_learning_task_metadata
 from pb.core.resources import read_template_text, template_exists
+from pb.core.session_activity import format_learning_partner_activity_markdown
 from pb.core.session_blueprints import blueprint_from_payload
-from pb.core.graph_writer import make_slug
 
 if TYPE_CHECKING:
     from pb.domain.models import Session, Task
@@ -354,6 +355,9 @@ class EvidenceWriter:
                     lines.append(f"- {prefix}{note}")
                 if lines:
                     extras.append("## Evidence Observed\n" + "\n".join(lines))
+        activity_section = format_learning_partner_activity_markdown(generated_names, limit=80)
+        if activity_section:
+            extras.append(activity_section.rstrip())
         if template_def.name != "_generic":
             summary_lines = []
             if actual_outcome:
