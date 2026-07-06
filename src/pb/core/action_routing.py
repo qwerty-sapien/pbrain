@@ -129,6 +129,13 @@ def _quote(text: str) -> str:
     return shlex.quote(text.strip()) if text.strip() else ""
 
 
+def _command_words(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.strip().split()
+
+
 def _display_scope(text: str) -> str:
     cleaned = (text or "").strip().strip("'\"")
     return cleaned or "this learning block"
@@ -172,6 +179,11 @@ def _semantic_action_for_command(command: str) -> str:
 def _human_label_for_command(command: str) -> str:
     normalized = command.strip()
     lowered = normalized.lower()
+    words = _command_words(normalized)
+    word0 = words[0].lower() if words else ""
+    word1 = words[1].lower() if len(words) > 1 else ""
+    parsed_tail = " ".join(words[1:]).strip()
+    parsed_tail_after_subcommand = " ".join(words[2:]).strip()
     if lowered == "finish":
         return "Finish the current session"
     if lowered == "pause":
@@ -190,24 +202,26 @@ def _human_label_for_command(command: str) -> str:
         return "Export ready recall cards"
     if lowered.startswith("anki list"):
         return "Review suggested recall cards"
-    if lowered.startswith("study recall "):
-        return f"Turn {_display_scope(normalized[13:])} into recall prompts"
-    if lowered == "study recall":
+    if word0 == "study" and word1 == "recall" and parsed_tail_after_subcommand:
+        return f"Turn {_display_scope(parsed_tail_after_subcommand)} into recall prompts"
+    if word0 == "study" and word1 == "recall":
         return "Generate recall prompts from recent study"
-    if lowered.startswith("teach "):
-        return f"Start a guided teaching session on {_display_scope(normalized[6:])}"
-    if lowered.startswith("study "):
-        return f"Study {_display_scope(normalized[6:])}"
-    if lowered.startswith("practise log "):
-        return f"Log deliberate practice for {_display_scope(normalized[13:])}"
-    if lowered.startswith("practise "):
-        return f"Practise {_display_scope(normalized[9:])}"
-    if lowered.startswith("thought "):
-        return f"Capture this thought: {_display_scope(normalized[8:])}"
+    if word0 == "study" and word1 == "debrief" and parsed_tail_after_subcommand:
+        return f"Study debrief {_display_scope(parsed_tail_after_subcommand)}"
+    if word0 == "teach" and parsed_tail:
+        return f"Start a guided teaching session on {_display_scope(parsed_tail)}"
+    if word0 == "study" and parsed_tail:
+        return f"Study {_display_scope(parsed_tail)}"
+    if word0 == "practise" and word1 == "log" and parsed_tail_after_subcommand:
+        return f"Log deliberate practice for {_display_scope(parsed_tail_after_subcommand)}"
+    if word0 == "practise" and parsed_tail:
+        return f"Practise {_display_scope(parsed_tail)}"
+    if word0 == "thought" and parsed_tail:
+        return f"Capture this thought: {_display_scope(parsed_tail)}"
     if lowered == "thought":
         return "Capture a quick thought"
-    if lowered.startswith("todo "):
-        return f"Capture this upcoming task: {_display_scope(normalized[5:])}"
+    if word0 == "todo" and parsed_tail:
+        return f"Capture this upcoming task: {_display_scope(parsed_tail)}"
     if lowered == "todo":
         return "Capture an upcoming task"
     if lowered == "resume":
@@ -336,21 +350,44 @@ def _topic_without_teach_phrases(intent: str) -> str:
     return cleaned or (intent or "").strip()
 
 
+def _clean_learning_topic(text: str) -> str:
+    return " ".join((text or "").strip(" \t\r\n'\"“”‘’`").strip(" :,-;.!?").split())
+
+
+def _topic_without_study_phrases(intent: str) -> str:
+    """Strip request framing so study suggestions pass only the learning scope."""
+    cleaned = _clean_learning_topic(intent)
+    patterns = [
+        r"^\s*(?:i\s+(?:want|need|would\s+like)\s+to\s+)(?:study|learn|understand|internali[sz]e)\s+",
+        r"^\s*(?:(?:let(?:'|’)?s|lets|let\s+us)\s+)(?:study|learn|understand|internali[sz]e)\s+",
+        r"^\s*(?:please\s+)?(?:study|learn|understand|internali[sz]e)\s+",
+        r"^\s*(?:(?:can|could)\s+(?:we|you)\s+)(?:study|learn|understand|work\s+through|go\s+over)\s+",
+        r"^\s*(?:work\s+through|go\s+over)\s+",
+    ]
+    for pattern in patterns:
+        updated = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+        updated = _clean_learning_topic(updated)
+        if updated != cleaned:
+            return updated or cleaned
+    return cleaned or (intent or "").strip()
+
+
 def _topic_without_practise_phrases(intent: str) -> str:
     """Strip request framing so practise suggestions name the skill, not the sentence."""
-    cleaned = (intent or "").strip()
+    cleaned = _clean_learning_topic(intent)
     patterns = [
         r"^\s*i\s+(?:want|need|would like)\s+to\s+practi[cs]e\s+",
+        r"^\s*(?:(?:let(?:'|’)?s|lets|let\s+us)\s+)(?:practi[cs]e|drill|do\s+reps\s+(?:on|for))\s+",
         r"^\s*please\s+practi[cs]e\s+",
         r"^\s*practi[cs]e\s+",
         r"^\s*drill\s+",
         r"^\s*do\s+reps\s+(?:on|for)\s+",
     ]
     for pattern in patterns:
-        updated = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip(" :,-")
+        updated = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+        updated = _clean_learning_topic(updated)
         if updated != cleaned:
-            cleaned = updated
-            break
+            return updated or cleaned
     return cleaned or (intent or "").strip()
 
 
@@ -1115,7 +1152,7 @@ def suggest_commands_for_intent(repo, intent: str, *, limit: int = 5) -> list[Co
     # like a CLEAN skill/learning TOPIC; otherwise fall through to the no-capable-mode
     # graceful next-action fallback below.
     if explicit_practise:
-        topic = intent.strip()
+        topic = _topic_without_practise_phrases(intent)
         if _looks_like_topic(topic):
             _add_candidate(
                 candidates,
@@ -1131,7 +1168,7 @@ def suggest_commands_for_intent(repo, intent: str, *, limit: int = 5) -> list[Co
             )
 
     if any(keyword in lowered for keyword in _STUDY_KEYWORDS):
-        topic = intent.strip()
+        topic = _topic_without_study_phrases(intent)
         if _looks_like_topic(topic):
             _add_candidate(
                 candidates,
