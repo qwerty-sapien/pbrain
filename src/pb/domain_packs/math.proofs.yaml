@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: math.proofs
+aliases:
+  - proof
+  - proofs
+  - theorem
+  - lemma
+nearby_terms:
+  - proof writing
+  - derivation
+  - justification
+skill_kind: conceptual
+primary_frame: model_or_proof_building
+secondary_frames:
+  - mechanism_tracing
+  - error_analysis
+subskills:
+  - statement_unpacking
+  - proof_strategy_choice
+  - dependency_tracking
+  - step_justification
+  - counterexample_awareness
+evidence_contract:
+  - worked_solution
+  - free_text_answer
+  - cloze
+  - self_rubric
+feedback_sources:
+  - llm_check
+  - self_check
+  - answer_key
+opening_move: "Restate the claim inside `{topic}` in precise plain language, list the givens and target conclusion, then commit to one proof strategy."
+stop_condition: "Stop when the learner can outline and justify a coherent proof path for `{topic}` without losing the logical target."
+coach_rules:
+  - "Ask for the next justified move, not vague summaries."
+  - "Force explicit use of definitions, lemmas, and quantifiers where they matter."
+  - "Treat gaps in justification as the main failure mode."
+safety_notes: []
+legacy_template_file: evidence_math.md

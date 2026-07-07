@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.engineering_build_debug
+aliases:
+  - engineering build debug
+skill_kind: engineering_build_debug
+primary_frame: failure_point_isolation
+secondary_frames:
+  - artifact_recreation
+  - error_analysis
+subskills:
+  - reproduction
+  - signal_capture
+  - hypothesis_testing
+  - fix_or_build_check
+  - follow_up_probe
+evidence_contract:
+  - debug_trace
+  - artifact_path
+  - free_text_answer
+  - self_rubric
+feedback_sources:
+  - compiler_or_test
+  - llm_check
+  - self_check
+opening_move: "Capture the real build, runtime, or artifact failure in `{topic}` first, then choose one narrow probe."
+stop_condition: "Stop when the learner has either resolved the concrete failure in `{topic}` or isolated the next precise hypothesis to test."
+coach_rules:
+  - "Treat logs, traces, tests, and artifact output as the source of truth."
+  - "Probe one hypothesis at a time."
+  - "Reject vague debugging summaries without concrete signal."
+safety_notes: []
+legacy_template_file: evidence_rust.md

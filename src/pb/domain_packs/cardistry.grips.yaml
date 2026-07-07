@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: cardistry.grips
+aliases:
+  - cardistry
+  - grips
+  - biddle grip
+  - mechanics grip
+  - straddle grip
+nearby_terms:
+  - deck handling
+  - finger placement
+  - pressure distribution
+  - flourish grip
+skill_kind: procedural_motor
+primary_frame: deliberate_rep_loop
+secondary_frames:
+  - failure_point_isolation
+  - perceptual_discrimination
+subskills:
+  - deck_edge_orientation
+  - finger_placement
+  - pressure_distribution
+  - static_hold_stability
+  - transition_path
+  - first_contact_point_failure
+evidence_contract:
+  - rep_count
+  - timed_hold
+  - free_text_answer
+  - recording
+  - self_rubric
+feedback_sources:
+  - physical_feedback
+  - recording_review
+  - self_check
+opening_move: "Set the deck for `{topic}`, do one slow setup rep, hold the final position for 3 seconds, and report exactly what tilts, slides, or squeezes first."
+stop_condition: "Stop when the learner can complete three slow clean reps for `{topic}` or can name the exact first failure point and next correction cue."
+coach_rules:
+  - "Treat finger placement, pressure, and deck stability as first-class evidence."
+  - "Never turn the session into a conceptual quiz when direct rep evidence is available."
+  - "Prefer slow reps, static holds, and concrete failure reports over generic explanation."
+safety_notes:
+  - "Stop if hand strain or numbness builds; reset before more reps."
+legacy_template_file: evidence_generic.md

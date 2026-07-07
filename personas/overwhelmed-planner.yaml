@@ -1,0 +1,40 @@
+---
+id: overwhelmed-planner
+domain_tag: productivity
+win_condition: "pb produces a prioritised view across my actual commitments without starting a study session"
+anti_goal: "pb routes my overwhelm into a single study session"
+messiness_traits:
+  - dumps multiple unrelated topics in one message
+  - changes priority mid-session
+  - asks "what should I do now?" repeatedly
+  - contradicts herself (says startup is urgent, then pivots to exam)
+  - ignores pb's answer and re-asks the same thing differently
+---
+
+## Backstory
+
+Sarah is a founder simultaneously juggling Cambridge B1 German prep, getting her startup MVP to beta, and trying to hit a fitness target before summer. She woke up feeling scattered — three browser tabs open, a half-written Slack message, and three sticky notes she can't prioritise.
+
+## Starting Mental State
+
+Overwhelmed, slightly frustrated, no clear priority. She knows she has commitments but can't see the forest for the trees. She wants pb to give her a structured, prioritised view — not start a new workflow from scratch.
+
+## Primary Intent
+
+Get a structured picture of what she should actually work on today, referenced to her existing goals and open todos.
+
+## Seed Vault State
+
+- Goal: "Pass Cambridge B1 exam in June"
+- Goal: "Ship MVP by end of Q3"
+- Todo: "Write product spec section 2" (2 days old)
+- Todo: "Book dentist appointment" (stale, from last week)
+- Todo: "Review German vocab deck" (stale)
+- 1 paused study session (German — unit 4)
+
+## Anti-goal Signals
+
+- pb responds with "let me start a study session for you" -> immediate FAIL
+- pb creates a single new task without referencing existing goals/todos -> FAIL
+- pb asks Sarah to clarify goals before showing her existing ones -> FAIL
+- pb ignores the paused session and open todos entirely -> FAIL

@@ -1,0 +1,40 @@
+# MCP
+
+pbrain exposes a stdio MCP server for local agent clients. The CLI remains the primary human interface.
+
+## Start
+
+```bash
+pb mcp status
+pb mcp doctor
+pb mcp print-config --client claude-desktop --vault main
+pb-mcp --vault main
+pb-mcp --vault main --allow-writes
+```
+
+Read-only is the default. Write tools require `--allow-writes` or the pending confirmation flow exposed by `pb mcp pending`, `pb mcp confirm`, and `pb mcp reject`.
+
+## Preferred Tool Shape
+
+Agents should use semantic pbrain tools rather than shelling out through `pb_command`:
+
+- goals
+- plan day
+- next action
+- thought and todo capture
+- feedback capture
+- study, practise, and teach session start
+- session pause, resume, finish, and status
+- review day and week
+- notes inbox and organization
+- context packet build
+- Anki candidate generation
+
+`pb_command` remains available as a debug escape hatch. It should cover the
+visible human CLI command surface and execute against the same `--vault` and
+`--config` selected for the MCP server. Read-only MCP mode still blocks
+commands that can mutate vault or SQLite state.
+
+## Current Boundaries
+
+The MCP surface is broader than the stable human CLI because it includes agent-only utilities and compatibility paths. Public product docs should still teach `goal -> plan -> study/practise`, `pb do`, `pb next`, and optional `pb review` first.

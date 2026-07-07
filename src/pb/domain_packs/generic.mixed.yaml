@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.mixed
+aliases:
+  - mixed
+skill_kind: mixed
+primary_frame: case_application
+secondary_frames:
+  - retrieval_probe
+  - deliberate_rep_loop
+subskills:
+  - concept_recall
+  - procedure_execution
+  - evidence_capture
+  - transfer
+evidence_contract:
+  - free_text_answer
+  - worked_solution
+  - self_rubric
+feedback_sources:
+  - self_check
+  - llm_check
+  - answer_key
+opening_move: "Surface one key idea in `{topic}`, then use it immediately in one concrete rep or application."
+stop_condition: "Stop when the learner has shown both understanding and one concrete execution trace for `{topic}`."
+coach_rules:
+  - "Alternate explanation with application."
+  - "Keep the session evidence-driven even when conceptual and practical work are mixed."
+  - "Name the weakest link between knowing and doing."
+safety_notes: []
+legacy_template_file: evidence_generic.md

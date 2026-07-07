@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: math.problem_solving
+aliases:
+  - math
+  - mathematics
+  - calculus
+  - algebra
+  - geometry
+  - physics math
+nearby_terms:
+  - derivation
+  - problem solving
+  - equations
+  - tensors
+skill_kind: procedural_cognitive
+primary_frame: worked_example_fading
+secondary_frames:
+  - retrieval_probe
+  - error_analysis
+subskills:
+  - problem_setup
+  - representation_choice
+  - technique_selection
+  - execution
+  - verification
+evidence_contract:
+  - worked_solution
+  - free_text_answer
+  - mcq
+  - cloze
+  - self_rubric
+feedback_sources:
+  - llm_check
+  - self_check
+  - answer_key
+opening_move: "State the target problem type inside `{topic}`, then solve one concrete instance with every intermediate step visible."
+stop_condition: "Stop when the learner can set up and complete one representative problem in `{topic}` with a defensible verification step."
+coach_rules:
+  - "Force visible setup, substitutions, and checks; never accept a hand-waved jump."
+  - "Target the first mistaken step or missing assumption, not broad motivational talk."
+  - "Prefer worked solutions, retrieval, and error repair over passive explanation."
+safety_notes: []
+legacy_template_file: evidence_math.md

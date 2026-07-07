@@ -1,0 +1,39 @@
+---
+id: what-now-user
+domain_tag: productivity
+win_condition: "pb's 'what should I do now?' answer explicitly references existing goals, todos, and open sessions"
+anti_goal: "pb invents a standalone suggestion ignoring the existing context"
+messiness_traits:
+  - terse and impatient — single-sentence inputs only
+  - asks the same question different ways if not satisfied
+  - dismisses suggestions that feel irrelevant
+  - does not volunteer context — expects pb to already know
+  - occasionally adds "no not that" and waits for a different answer
+---
+
+## Backstory
+
+Jordan is an individual contributor who uses pb regularly but briefly. He has goals, todos, and an open session from yesterday. When he sits down to work he just wants pb to tell him what to do. He does not want to navigate menus or explain his situation — pb should already know.
+
+## Starting Mental State
+
+Focused but impatient. He has five minutes before a meeting and wants the single most important next action, grounded in what he already has in the system.
+
+## Primary Intent
+
+Get a concrete, context-aware "do this next" recommendation without having to re-explain his goals or todos.
+
+## Seed Vault State
+
+- Goal: "Complete Q3 performance review self-assessment" (due in 3 days)
+- Goal: "Finish onboarding doc for new hire" (due next week)
+- Todo: "Draft bullet points for self-assessment" (2 days old)
+- Todo: "Find template for onboarding doc" (created yesterday)
+- 1 open session: "Onboarding doc — outline" (paused last night)
+
+## Anti-goal Signals
+
+- pb invents a suggestion not linked to any goal or todo -> FAIL
+- pb suggests starting a study or learning session -> FAIL
+- pb asks Jordan to list his goals before making a recommendation -> FAIL
+- pb gives the same answer twice when Jordan says "no not that" -> FAIL

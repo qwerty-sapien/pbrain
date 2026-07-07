@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.procedural_motor
+aliases:
+  - procedural motor
+skill_kind: procedural_motor
+primary_frame: deliberate_rep_loop
+secondary_frames:
+  - failure_point_isolation
+  - perceptual_discrimination
+subskills:
+  - setup_position
+  - tension_control
+  - stability
+  - transition
+  - repeatability
+evidence_contract:
+  - rep_count
+  - timed_hold
+  - recording
+  - self_rubric
+feedback_sources:
+  - physical_feedback
+  - recording_review
+  - self_check
+opening_move: "Do one slow rep of `{topic}`, pause at the hardest position, and report the first physical breakdown point."
+stop_condition: "Stop when the learner has either repeated a clean rep several times or isolated the exact motor failure point with a next cue."
+coach_rules:
+  - "Prioritize visible reps, holds, and stability over verbal explanation."
+  - "Reduce speed before increasing complexity."
+  - "Track the first physical compensation or collapse point."
+safety_notes:
+  - "Stop if pain, numbness, or unsafe loss of control appears."
+legacy_template_file: evidence_generic.md

@@ -1,0 +1,38 @@
+---
+id: math-hobbyist
+domain_tag: learning
+win_condition: "pb supports conceptual math study and captures mnemonic thoughts against a learning goal"
+anti_goal: "pb drills rote facts ignoring the conceptual gaps the learner flagged"
+messiness_traits:
+  - jumps between topics (number theory to topology to probability) without finishing one
+  - offers mnemonic asides mid-explanation ("I always remember this as...")
+  - conceptual confusion surfaces suddenly after apparent understanding
+  - prefers intuition-building over formal proof, then gets frustrated at vagueness
+  - asks for the "big picture" before wanting details, then wants more details than expected
+---
+
+## Backstory
+
+Leo is a software engineer who fell in love with mathematics in his 30s. He studies topology and number theory as a hobby with no exam deadline. He reads books but the conceptual connections don't stick without active recall. He wants pb to help him build durable intuitions, not memorise definitions — and he wants his mnemonic insights captured so he can review them later.
+
+## Starting Mental State
+
+Curious and enthusiastic but prone to conceptual fog after sustained effort. He has been reading about compactness for an hour and feels like he almost understands it — until someone asks him to explain it.
+
+## Primary Intent
+
+Solidify conceptual understanding of compactness in topology, capture a mnemonic insight that just occurred to him, and connect this session to his broader math learning goal.
+
+## Seed Vault State
+
+- Goal: "Build durable intuition in undergraduate topology and number theory" (active, no deadline)
+- Session: "Topology — compactness" (active, 45 min in, not yet finished)
+- Notes: "Mnemonic: compactness is 'every open cover has a finite subcover' — like a blanket that always works"
+- Notes: "Confusion: how does compactness relate to closedness in metric spaces?"
+
+## Anti-goal Signals
+
+- pb drills formal definitions without helping Leo build intuition first -> FAIL
+- pb ignores the mnemonic Leo mentions and does not capture it -> FAIL
+- pb treats this as a rote-recall session with flashcard-style Q&A only -> FAIL
+- pb does not connect the session to the broader topology/number theory goal -> FAIL

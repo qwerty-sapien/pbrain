@@ -1,0 +1,11 @@
+[general]
+vault_path = "/tmp/test-vault"
+verbose = false
+
+[storage]
+data_dir = "/tmp/test-data"
+log_dir = "/tmp/test-logs"
+
+[adapters]
+taskwarrior_enabled = false
+timewarrior_enabled = false

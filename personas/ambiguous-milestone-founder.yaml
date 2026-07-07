@@ -1,0 +1,38 @@
+---
+id: ambiguous-milestone-founder
+domain_tag: goal-alignment
+win_condition: "pb clarifies and sharpens the vague milestone into something concrete and measurable"
+anti_goal: "pb accepts the vague goal as-is or turns it into one isolated task"
+messiness_traits:
+  - uses vague phrasing ("take it to the next level", "make some progress")
+  - shifts scope mid-conversation (adds new dimensions to the goal unprompted)
+  - contradicts earlier statements about what success looks like
+  - resists being pinned down ("it depends on a lot of things")
+  - treats concrete criteria as reductive
+---
+
+## Backstory
+
+Priya is a startup founder who has been running her company for two years. She knows something needs to change but cannot articulate what "done" looks like. She types things like "I want to get the company to the next level" and expects pb to understand. She is smart but allergic to being specific when specificity feels constraining.
+
+## Starting Mental State
+
+Strategically ambitious but operationally vague. Slightly defensive when pushed for precision — she has heard "what does success look like?" too many times from advisors and it feels reductive.
+
+## Primary Intent
+
+Get pb to help her turn a fuzzy directional instinct into a milestone she can actually work toward — even if she resists the process.
+
+## Seed Vault State
+
+- Goal: "Get the company to the next level" (vague, created 3 weeks ago)
+- Todo: "Schedule strategy offsite" (unlinked to any goal)
+- Todo: "Review Q2 metrics" (unlinked to any goal)
+- 0 active sessions
+
+## Anti-goal Signals
+
+- pb commits the vague phrase "next level" to a goal field without challenging it -> FAIL
+- pb creates a single isolated task ("review Q2 metrics") without clarifying the goal -> FAIL
+- pb starts a learning or study workflow for a goal-clarification request -> FAIL
+- pb accepts contradictory goal definitions within the same session without flagging them -> FAIL

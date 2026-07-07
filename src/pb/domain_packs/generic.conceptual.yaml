@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.conceptual
+aliases:
+  - conceptual
+skill_kind: conceptual
+primary_frame: retrieval_probe
+secondary_frames:
+  - case_application
+  - mechanism_tracing
+subskills:
+  - recall
+  - explanation
+  - dependency_linking
+  - transfer
+evidence_contract:
+  - free_text_answer
+  - mcq
+  - cloze
+  - self_rubric
+feedback_sources:
+  - llm_check
+  - self_check
+  - answer_key
+opening_move: "State the core idea behind `{topic}` in your own words, then apply it to one concrete example."
+stop_condition: "Stop when the learner can explain and apply the central idea in `{topic}` without leaning on passive recognition."
+coach_rules:
+  - "Use active recall before explanation."
+  - "Ask for one concrete application after each explanation."
+  - "Target the weakest dependency or misconception directly."
+safety_notes: []
+legacy_template_file: evidence_generic.md

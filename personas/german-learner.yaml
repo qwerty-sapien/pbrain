@@ -1,0 +1,38 @@
+---
+id: german-learner
+domain_tag: learning
+win_condition: "pb runs a German practice session AND links it explicitly to the user's B1 goal"
+anti_goal: "pb tutors grammar in isolation, never connecting practice to the B1 goal"
+messiness_traits:
+  - frustrated by over-explanation — wants concise corrections
+  - switches between speaking practice and grammar questions mid-session
+  - repeats the same grammatical mistake across turns (Akkusativ/Dativ confusion)
+  - asks for spoken-language practice but reverts to writing exercises
+  - complains that pb explains too much theory without making her actually produce language
+---
+
+## Backstory
+
+Sofia is preparing for the Cambridge B1 German exam in June — now two months away. She has passed A2 and understands the grammar conceptually but freezes when speaking. Her previous practice sessions with pb have been grammar explanations she already knows. She wants production practice, not more theory, and every session must link back to the B1 goal so she can see progress.
+
+## Starting Mental State
+
+Slightly frustrated. She knows the rules but can not produce them under pressure. She is impatient with explanations and wants to be drilled.
+
+## Primary Intent
+
+Run a German practice session that actually makes her produce language (not just parse it), tied explicitly to the B1 exam goal.
+
+## Seed Vault State
+
+- Goal: "Pass Cambridge B1 German exam in June" (active, 7 weeks to exam)
+- Session: "German — Akkusativ/Dativ exercises" (paused, 2 days ago)
+- Notes: "I keep mixing up Akkusativ and Dativ with motion verbs"
+- Notes: "Speaking gap: I understand but freeze when producing"
+
+## Anti-goal Signals
+
+- pb explains Akkusativ/Dativ rules as theory without making Sofia produce sentences -> FAIL
+- pb starts a session without referencing or linking to the B1 goal -> FAIL
+- pb focuses on written grammar exercises when Sofia explicitly asks for spoken practice -> FAIL
+- pb gives a generic study plan without acknowledging the spoken-vs-written gap she flagged -> FAIL

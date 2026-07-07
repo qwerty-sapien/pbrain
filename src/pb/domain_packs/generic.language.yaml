@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+pack_id: generic.language
+aliases:
+  - language
+skill_kind: language
+primary_frame: performance_simulation
+secondary_frames:
+  - retrieval_probe
+  - error_analysis
+subskills:
+  - vocabulary_recall
+  - structure_control
+  - pronunciation_or_intonation
+  - comprehension
+  - repair
+evidence_contract:
+  - free_text_answer
+  - recording
+  - cloze
+  - mcq
+feedback_sources:
+  - coach_or_peer
+  - recording_review
+  - self_check
+opening_move: "Produce one short utterance, phrase set, or comprehension response for `{topic}` immediately, then repair the first obvious weakness."
+stop_condition: "Stop when the learner has produced one concrete language output for `{topic}` and repaired the most important error."
+coach_rules:
+  - "Force production early."
+  - "Correct the highest-signal error first."
+  - "Use pronunciation or listening checks only when they affect meaning or fluency."
+safety_notes: []
+legacy_template_file: evidence_german.md
